@@ -812,8 +812,14 @@
     let fbHtml='';
     if(answered){
       const ok=quiz.results[quiz.idx];
+      const topicHtml=q.topic?`<div class="qtopic">🏷 知識點：${esc(q.topic)}</div>`:'';
+      const oralHtml=q.oral?`<div class="oral"><b>💬 大白話解析：</b><p>${esc(q.oral)}</p></div>`:'';
+      const trapHtml=(!ok&&q.trap)?`<div class="trapbox">🔍 <b>這題的陷阱：</b>${esc(q.trap)}</div>`:'';
       fbHtml=`<div class="feedback ${ok?'ok':'no'}">${ok?'✓ 答對了':'✗ 答錯了'}　正確答案：${q.answer.join('、')}</div>
-        <div class="exp"><b>解析：</b>${esc(q.explanation)}</div>
+        ${topicHtml}
+        ${oralHtml}
+        ${q.explanation?`<details class="exp"><summary>📖 原版解析（條文／課本說法）</summary>${esc(q.explanation)}</details>`:''}
+        ${trapHtml}
         <button class="favbtn ${favOn?'on':''}" data-act="fav-toggle" data-key="${key}">${favOn?'★ 已收藏':'☆ 收藏'}</button>`;
     }
     const actionBtn=answered

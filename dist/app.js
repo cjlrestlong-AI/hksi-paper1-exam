@@ -7,7 +7,224 @@
   let quiz=null;
 
   function load(){ try{return JSON.parse(localStorage.getItem(KEY))||{};}catch(e){return {};} }
-  function save(){ try{localStorage.setItem(KEY,JSON.stringify(state));}catch(e){} }
+  function save(){ try{localStorage.setItem(KEY,JSON.stringify(state));}catch(e){} schedulePush(); }
+
+  // ===== 跨裝置雲端同步：支援「自架伺服器」與「Supabase（零自託管）」兩種後端 =====
+  const SYNC_KEY='hksi_sync_uid';
+  const BASE_KEY='hksi_sync_base';
+  const SUPA_KEY='hksi_supabase';
+  let syncOn = !window.QBANK_FULL;     // file:// 離線單檔不啟用同步
+  let syncUid = '';
+  let syncBase = '';                   // 自架伺服器網址（https）
+  let syncMode = '';                   // '' | 'server' | 'supabase'
+  let supaUrl = '', supaKey = '';      // Supabase 專案設定
+  let saveTimer=null, pushing=false, curTab='home';
+  let curView='home', pullTimer=null;   // curView 記錄當前畫面，用於「無感自動下拉」判斷是否安全重渲染
+  // 靜態面板（答題/結果/講義/計劃除外）才允許自動下拉後靜默重渲染
+  const SAFE_VIEWS=['home','practice','stats','me','wrong','fav'];
+  let _lastPull=0,_lastPush=0,_cloudAns=-1;   // 同步診斷用：最近下拉/上傳時間、雲端題數
+  function getSupa(){try{return JSON.parse(localStorage.getItem(SUPA_KEY)||'null');}catch(e){return null;}}
+  function setSupa(o){try{localStorage.setItem(SUPA_KEY,JSON.stringify(o));}catch(e){}}
+  function readCookie(n){try{const m=document.cookie.match(new RegExp('(?:^|; )'+n+'=([^;]*)'));return m?decodeURIComponent(m[1]):'';}catch(e){return '';}}
+  function writeCookie(n,v,d){try{const e=new Date(Date.now()+d*864e5).toUTCString();document.cookie=n+'='+encodeURIComponent(v)+'; expires='+e+'; path=/; SameSite=Lax';}catch(e){}}
+  function getUid(){return (localStorage.getItem(SYNC_KEY)||readCookie(SYNC_KEY)||'').trim();}
+  function setUid(u){try{localStorage.setItem(SYNC_KEY,u);}catch(e){} writeCookie(SYNC_KEY,u,365);}
+  function getBase(){try{return (localStorage.getItem(BASE_KEY)||'').trim();}catch(e){return '';}}
+  function setBase(b){try{localStorage.setItem(BASE_KEY,b);}catch(e){}}
+  function schedulePush(){ if(!syncOn||!syncUid)return; if(saveTimer)clearTimeout(saveTimer); saveTimer=setTimeout(pushSync,1200); }
+  function pushSync(){
+    if(!syncOn||!syncUid||pushing)return; pushing=true;
+    if(syncMode==='supabase'){
+      supaUpsert({uid:syncUid,data:state,updated_at:Date.now()})
+        .then(()=>{state._syncedAt=Date.now();_lastPush=Date.now();})
+        .catch(err=>{ toast('☁️ 上傳失敗（'+(err&&err.message||'網路錯誤')+'）— 請檢查 Supabase RLS/權限'); })
+        .then(()=>{pushing=false;});
+      return;
+    }
+    fetch((syncBase||'')+'/api/progress',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:syncUid,data:state,updatedAt:Date.now()})})
+      .then(r=>r.ok?r.json():null).then(j=>{ if(j&&j.updatedAt){state._syncedAt=j.updatedAt;_lastPush=Date.now();} })
+      .catch(()=>{}).then(()=>{pushing=false;});
+  }
+  function mergeState(R){
+    let changed=false;
+    const L=state;
+    // 已作答題目（object: id -> {correct,ts}），取較新者
+    L.answered=L.answered||{}; R.answered=R.answered||{};
+    const ba=Object.keys(L.answered).length;
+    const a={...L.answered};
+    Object.keys(R.answered).forEach(k=>{ if(!a[k]||(R.answered[k].ts||0)>=(a[k].ts||0)) a[k]=R.answered[k]; });
+    L.answered=a;
+    if(Object.keys(L.answered).length!==ba)changed=true;
+    // 陣列型集合（錯題/收藏/打卡日）
+    ['wrong','fav','checkins'].forEach(f=>{
+      const b=(L[f]||[]).length;
+      const s=new Set((L[f]||[]).concat(R[f]||[])); L[f]=[...s];
+      if((L[f]||[]).length!==b)changed=true;
+    });
+    // planDone 為 object（打卡任務 id -> true），物件合併
+    const bp=Object.keys(L.planDone||{}).length;
+    L.planDone=Object.assign({}, L.planDone||{}, R.planDone||{});
+    if(Object.keys(L.planDone||{}).length!==bp)changed=true;
+    if(changed)save();   // 僅在真的合併到新資料時才寫入與上傳，避免無謂刷新閃爍
+    return changed;
+  }
+  function pullSync(cb, notify){
+    if(!syncOn||!syncUid){cb&&cb();return;}
+    const finish=()=>{cb&&cb();};
+    // 僅在「安全靜態面板」且資料有變動時，靜默重渲染並保留滾動位置，做到完全無感
+    const rerender=()=>{
+      if(!SAFE_VIEWS.includes(curView))return;
+      const st=el('screen').scrollTop;
+      if(curView==='home')goHome();
+      else if(curView==='practice')goPractice();
+      else if(curView==='stats')goStats();
+      else if(curView==='me')goMe();
+      else if(curView==='wrong')goWrong();
+      else if(curView==='fav')goFav();
+      el('screen').scrollTop=st;
+    };
+    // 套用雲端資料：成功拉取即記錄時間與雲端題數；有變動才重渲染
+    const apply=obj=>{
+      const dd = (obj&&!Array.isArray(obj)) ? obj.data : (obj&&obj[0]?obj[0].data:null);
+      if(dd){
+        _lastPull=Date.now();
+        _cloudAns = dd.answered?Object.keys(dd.answered).length:-1;
+        if(mergeState(dd)){
+          rerender();
+          if(notify)toast('☁️ 已從雲端同步新進度（本機已更新）');
+        }
+        return true;
+      }
+      return false;
+    };
+    if(syncMode==='supabase'){
+      supaSelect(syncUid).then(arr=>{ if(!apply(arr)) pushSync(); finish(); })
+        .catch(()=>{finish();});
+      return;
+    }
+    fetch((syncBase||'')+'/api/progress?uid='+encodeURIComponent(syncUid)).then(r=>r.ok?r.json():null).then(j=>{ if(!apply(j)) pushSync(); finish(); })
+      .catch(()=>{finish();});
+  }
+  // 每 15 秒無感自動下拉：任何視圖都會「拉取並合併」資料（保證資料永遠收斂）；
+  // 只有「靜態面板」才靜默重渲染，答題/結果/講義/計劃等臨時畫面絕不打斷。
+  function startAutoPull(){
+    if(pullTimer)clearInterval(pullTimer);
+    pullTimer=setInterval(()=>{
+      if(syncOn&&syncUid) pullSync(null,true);
+    },15000);
+  }
+  // 手動「立即雙向同步」：先下拉合併雲端，再上傳本機，確保兩邊完全一致
+  function fullSync(){
+    if(!syncOn||!syncUid){toast('尚未連接雲端，請先於「我的 › 雲端同步」設定');return;}
+    toast('同步中…');
+    pullSync(()=>{ pushSync(); toast('☁️ 已與雲端雙向同步'); }, false);
+  }
+  function syncStatus(){
+    const mode = syncMode==='supabase'?'Supabase 雲端':(syncMode==='server'?'同步伺服器':'—');
+    const lp = _lastPull?Math.max(0,Math.round((Date.now()-_lastPull)/1000))+' 秒前':'從未';
+    const lpu = _lastPush?Math.max(0,Math.round((Date.now()-_lastPush)/1000))+' 秒前':'從未';
+    const la = Object.keys(state.answered||{}).length;
+    const ca = _cloudAns>=0?_cloudAns:'—';
+    return '模式：'+mode+'<br>本機 <b>'+la+'</b> 題　·　雲端 <b>'+ca+'</b> 題<br>最近下拉 '+lp+'　·　最近上傳 '+lpu;
+  }
+  function supaSelect(code){
+    const url=supaUrl.replace(/\/+$/,'')+'/rest/v1/progress?uid=eq.'+encodeURIComponent(code)+'&select=*';
+    return fetch(url,{headers:{'apikey':supaKey,'Authorization':'Bearer '+supaKey}}).then(r=>{ if(!r.ok)throw new Error('sel '+r.status); return r.json(); });
+  }
+  function supaUpsert(rec){
+    const url=supaUrl.replace(/\/+$/,'')+'/rest/v1/progress?on_conflict=uid';
+    return fetch(url,{method:'POST',headers:{'apikey':supaKey,'Authorization':'Bearer '+supaKey,'Content-Type':'application/json','Prefer':'resolution=merge-duplicates'},body:JSON.stringify(rec)}).then(r=>{ if(!r.ok)throw new Error('upd '+r.status); return r; });
+  }
+  function initSync(){
+    if(!syncOn)return;            // file:// 離線單檔不啟用
+    const supa=getSupa();
+    if(supa&&supa.url&&supa.key){ // Supabase 模式（零自託管，靜態部署也能用）
+      syncMode='supabase'; supaUrl=supa.url; supaKey=supa.key;
+      const u=getUid();
+      if(u){ syncUid=u; pullSync(); }
+      else { showSyncSetup(false); }
+      return;
+    }
+    syncBase=getBase();          // 讀取已儲存的遠端伺服器網址
+    if(syncBase){
+      syncMode='server';
+      fetch((syncBase||'')+'/api/health').then(r=>r.ok?r.json():null).then(j=>{
+        if(j&&j.ok){
+          const u=getUid();
+          if(u){ syncUid=u; pullSync(); }
+          else { showSyncSetup(false); }
+        } else { syncOn=false; if(curTab==='me')goMe(); }
+      }).catch(()=>{ syncOn=false; });
+      return;
+    }
+    // 靜態部署、尚未設定任何同步：不主動彈窗，等使用者於「我的 › 雲端同步」點開設定
+    syncOn=false;
+  }
+  function showSyncSetup(linkMode){
+    const sug = linkMode?'':'hksi-'+Math.random().toString(36).slice(2,8);
+    const supa=getSupa()||{}; supaUrl=supa.url||''; supaKey=supa.key||'';
+    const ov=document.createElement('div'); ov.className='sync-modal';
+    ov.innerHTML=`<div class="sync-card">
+      <div class="sync-h">${linkMode?'🔗 連結雲端同步碼':'☁️ 跨裝置雲端同步'}</div>
+      <p class="sync-p">設定一組<b>同步碼</b>，在所有手機／微信／瀏覽器輸入<b>相同</b>同步碼，答題與打卡進度即自動雲端統一、隨處接續。</p>
+      <div class="sync-row"><input id="syncInput" class="sync-in" maxlength="40" value="${sug}" placeholder="例如 stephen2026"></div>
+      <div class="sync-err" id="syncErr"></div>
+      <button class="primary wide" id="syncCreate">${linkMode?'連結並同步':'建立並開始同步'}</button>
+      ${linkMode?'':'<button class="ghost wide" id="syncLink">我已有同步碼 ›</button>'}
+      <div class="sync-note">請選一組好記且不易被猜到的碼並自行記下；更換裝置時輸入同一碼即可還原進度。</div>
+      <div class="sync-adv"><div class="sync-adv-h" id="syncAdvH">▸ 進階：指定同步伺服器網址</div>
+        <div class="sync-adv-b" id="syncAdvB" style="display:none">
+          <div class="sync-row"><input id="syncBaseInput" class="sync-in" value="${esc(syncBase)}" placeholder="https://你的伺服器網址"></div>
+          <button class="ghost wide" id="syncBaseSet">連線此伺服器</button>
+          <div class="sync-err" id="syncBaseErr"></div>
+        </div>
+      </div>
+      <div class="sync-adv"><div class="sync-adv-h" id="syncSupaH">▸ 進階：使用 Supabase 雲端（零自託管，推薦）</div>
+        <div class="sync-adv-b" id="syncSupaB" style="display:none">
+          <div class="sync-row"><input id="supaUrlInput" class="sync-in" value="${esc(supaUrl)}" placeholder="https://xxxx.supabase.co"></div>
+          <div class="sync-row"><input id="supaKeyInput" class="sync-in" value="${esc(supaKey)}" placeholder="anon key（公開金鑰）"></div>
+          <button class="ghost wide" id="supaSet">連線 Supabase</button>
+          <div class="sync-err" id="supaErr"></div>
+        </div>
+      </div>
+    </div>`;
+    document.body.appendChild(ov);
+    const input=ov.querySelector('#syncInput'), err=ov.querySelector('#syncErr'), btn=ov.querySelector('#syncCreate');
+    btn.onclick=()=>{ const v=input.value.trim(); if(!/^[A-Za-z0-9_-]{3,40}$/.test(v)){err.textContent='同步碼須為 3–40 位英文、數字、_ 或 -';return;} syncUid=v; setUid(v); syncOn=true; ov.remove(); pushSync(); toast('已開啟雲端同步 ☁️ 進度自動備份'); };
+    if(!linkMode){ const link=ov.querySelector('#syncLink'); if(link)link.onclick=()=>{ input.value=''; err.textContent=''; btn.textContent='連結並同步'; link.style.display='none'; input.focus(); }; }
+    const advH=ov.querySelector('#syncAdvH'), advB=ov.querySelector('#syncAdvB');
+    if(advH)advH.onclick=()=>{ advB.style.display = advB.style.display==='none'?'block':'none'; };
+    const baseSet=ov.querySelector('#syncBaseSet');
+    if(baseSet)baseSet.onclick=()=>{
+      const b=ov.querySelector('#syncBaseInput').value.trim().replace(/\/+$/,'');
+      const berr=ov.querySelector('#syncBaseErr');
+      if(!/^https:\/\//.test(b)){berr.textContent='請輸入 https:// 開頭的伺服器網址';return;}
+      berr.textContent='連線中…';
+      fetch(b+'/api/health').then(r=>r.ok?r.json():null).then(j=>{
+        if(j&&j.ok){ setBase(b); syncBase=b; syncMode='server'; berr.textContent=''; if(getUid()){syncUid=getUid();pullSync();} ov.remove(); toast('已連線同步伺服器 ☁️'); }
+        else { berr.textContent='無法連線該伺服器（請確認網址與 HTTPS）'; }
+      }).catch(()=>{ berr.textContent='無法連線該伺服器（跨域或網址錯誤）'; });
+    };
+    const supaH=ov.querySelector('#syncSupaH'), supaB=ov.querySelector('#syncSupaB');
+    if(supaH)supaH.onclick=()=>{ supaB.style.display = supaB.style.display==='none'?'block':'none'; };
+    const supaSet=ov.querySelector('#supaSet');
+    if(supaSet)supaSet.onclick=()=>{
+      const u=ov.querySelector('#supaUrlInput').value.trim().replace(/\/+$/,'').replace(/\/rest\/v1\/?$/,'');
+      const k=ov.querySelector('#supaKeyInput').value.trim();
+      const e=ov.querySelector('#supaErr');
+      if(!/^https:\/\/.+\.supabase\.co$/.test(u)){e.textContent='請輸入 https://xxxx.supabase.co 格式網址';return;}
+      if(!k){e.textContent='請貼上 anon key';return;}
+      e.textContent='連線中…';
+      fetch(u.replace(/\/+$/,'')+'/rest/v1/progress?select=uid&limit=1',{headers:{'apikey':k,'Authorization':'Bearer '+k}}).then(r=>{
+        if(r.ok||r.status===200){
+          setSupa({url:u,key:k}); supaUrl=u; supaKey=k; syncMode='supabase'; syncOn=true; e.textContent='✅ Supabase 已連線，請設定下方同步碼';
+          const uid=getUid(); if(uid){syncUid=uid;pullSync();ov.remove();toast('已連線 Supabase ☁️');}
+          else { toast('Supabase 已連線，請設定同步碼'); }
+        } else { e.textContent='連線失敗（'+r.status+'）— 請確認網址/key，且資料表 progress 已建立'; }
+      }).catch(()=>{ e.textContent='連線失敗（跨域/CORS）— 請到 Supabase 設定允許此網站來源'; });
+    };
+  }
+
   if(!state.answered)state.answered={};
   if(!state.wrong)state.wrong=[];
   if(!state.fav)state.fav=[];
@@ -42,7 +259,7 @@
   }
   function afterLoad(){
     if(!QBANK){setScreen('<p style="padding:20px;color:#8b9bb0">題庫載入失敗</p>');return;}
-    buildIndex();goHome();
+    buildIndex();goHome();initSync();startAutoPull();
   }
 
   function computeStats(){
@@ -75,12 +292,12 @@
     for(let i=13;i>=0;i--){const d=new Date(today);d.setDate(today.getDate()-i);
       const ds=d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate());days.push({ds,v:daily[ds]||0});}
     const max=Math.max(1,...days.map(x=>x.v));
-    const w=300,h=64,n=days.length,step=w/(n-1);
+    const w=300,h=80,n=days.length,step=w/(n-1);
     const pts=days.map((x,i)=>`${(i*step).toFixed(1)},${(h-(x.v/max)*h).toFixed(1)}`).join(' ');
     return `<svg class="trend" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none">
       <polygon points="0,${h} ${pts} ${w},${h}" fill="rgba(7,193,96,.12)"/>
       <polyline points="${pts}" fill="none" stroke="#07c160" stroke-width="2"/>
-    </svg><div class="trendl">近 14 日答題趨勢（今日 ${days[days.length-1].v} 題）</div>`;
+    </svg>`;
   }
 
   // ---------- 7-week plan (in-app) ----------
@@ -253,6 +470,7 @@
   }
 
   function goPlan(){
+    curView='plan';
     setActive('home');
     let total=0,done=0,html='';
     PLAN.forEach((w,wi)=>{
@@ -280,6 +498,7 @@
 
   // ---------- chapter notes (講義) ----------
   function goNotes(){
+    curView='notes';
     setActive('home');
     const N=window.NOTES||[];
     if(!N.length){setScreen('<div class="phead"><a data-act="tab" data-tab="home" class="pback">‹ 返回</a> 章節講義</div><div class="empty">講義資源未載入</div>');return;}
@@ -296,6 +515,7 @@
       <div class="pnote">建議流程：先讀講義 → 再刷本章練習題</div>`);
   }
   function goNote(ch){
+    curView='note';
     setActive('home');
     const N=window.NOTES||[];const n=N.find(x=>x.id===ch);
     if(!n){goNotes();return;}
@@ -308,6 +528,7 @@
   // ---------- chapter question list (題目列表 + 作答進度) ----------
   function isAnswered(q){return !!state.answered[sessionKey(q)];}
   function goChapterList(ch, presetFilter){
+    curView='chlist';
     setActive('practice');
     curChId=ch; qlExpanded=false;
     const c=QBANK.chapters.find(x=>x.id===ch);
@@ -431,6 +652,7 @@
   }
   // ---------- screens ----------
   function goHome(){
+    curView='home';
     setActive('home');
     const st=computeStats();const streak=longestStreak(state.checkins);const today=todayStr();
     const checked=state.checkins.includes(today);
@@ -457,6 +679,7 @@
      <div class="planlink"><a data-act="plan">📋 查看 7 週打卡計劃表</a></div>`);
   }
   function goPractice(){
+    curView='practice';
     setActive('practice');
     const st=computeStats();let rows='';
     QBANK.chapters.forEach(c=>{
@@ -471,35 +694,79 @@
     setScreen(`<div class="phead">章節練習</div><div class="chlist">${rows}</div>`);
   }
   function goStats(){
+    curView='stats';
     setActive('stats');
-    const st=computeStats();let brows='';
-    for(let i=1;i<=9;i++){const s=st.byCh[i];const m=s.answered?(s.correct/s.answered):0;const pct=Math.round(m*100);const h=Math.max(3,m*100);
-      brows+=`<div class="brow"><span class="bl">${i}</span><div class="btrack"><div class="bfill" style="height:${h}%"></div></div><span class="bp">${pct}%</span><span class="bc">${s.answered||0}</span></div>`;}
+    const st=computeStats();
+    const total=st.total, correct=st.correct, wrong=total-correct;
     const mb=state.mockBest?state.mockBest.score+'/60':'—';
+    const streak=longestStreak(state.checkins);
+    // 頂部：環形圖 + 指標網格
+    let kgrid='';
+    const si=(label,val)=>`<div class="stats-si"><b>${val}</b><span>${label}</span></div>`;
+    kgrid+=si('總答題',total+' 題');
+    kgrid+=si('正確',correct+' 題');
+    kgrid+=si('錯誤',wrong+' 題');
+    kgrid+=si('連續打卡',streak+' 天');
+    if(state.mockBest)kgrid+=si('模考最佳',mb);  // 奇數項時多一行
+    // 分章掌握度 – 兩行卡片佈局（標題行 + 進度條）
+    let chrows='';
+    for(let i=1;i<=9;i++){
+      const s=st.byCh[i];
+      const m=s.answered?(s.correct/s.answered):0;
+      const pct=Math.round(m*100);
+      const fillPct=Math.max(0,Math.min(100,pct));
+      chrows+=`<div class="chrow">
+        <div class="chrow-head">
+          <span class="chrow-num">第 ${i} 章</span>
+          <span class="chrow-pct">${pct}%</span>
+        </div>
+        <div class="chrow-track">
+          <div class="chrow-fill" style="width:${fillPct}%"></div>
+        </div>
+      </div>`;
+    }
+    // 趨勢圖（含今日/最高摘要）
+    const daysArr=[];const today=new Date();
+    for(let i=13;i>=0;i--){const d=new Date(today);d.setDate(today.getDate()-i);
+      const ds=d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate());daysArr.push(st.daily[ds]||0);}
+    const todayV=daysArr[daysArr.length-1], maxV=Math.max(1,...daysArr);
     setScreen(`<div class="phead">學習統計</div>
-      <div class="card center">${ring(st.acc)}</div>
-      <div class="card"><div class="ct">分章掌握度</div>${brows}</div>
-      <div class="card"><div class="ct">打卡與趨勢</div>
-        <div class="kv"><span>最長連續打卡</span><b>${longestStreak(state.checkins)} 天</b></div>
-        <div class="kv"><span>模考最佳</span><b>${mb}</b></div>
+      <div class="card stats-hero">
+        <div class="stats-ring">${ring(st.acc)}</div>
+        <div class="stats-kgrid">${kgrid}</div>
+      </div>
+      <div class="card"><div class="ct">📊 分章掌握度</div>${chrows}</div>
+      <div class="card trend-card"><div class="ct">📈 近 14 日趨勢</div>
         ${trend(st.daily)}
-      </div>`);
+        <div class="trend-summary"><span>今日 ${todayV} 題</span><span>最高 ${maxV>0?maxV:'—'} 題</span></div>
+      </div>
+      ${state.mockBest?'':'<div class="card" style="text-align:center;padding:16px;color:var(--mut);font-size:13px">完成一次模考後，這裡會顯示你的最佳成績 🎯</div>'}`);
   }
   function goMe(){
+    curView='me';
     setActive('me');
     setScreen(`<div class="phead">我的</div>
       <div class="card">
         <div class="mlink" data-act="tab" data-tab="wrong"><span>📕 錯題本</span><b>${state.wrong.length} 題 ›</b></div>
         <div class="mlink" data-act="tab" data-tab="fav"><span>⭐ 收藏夾</span><b>${state.fav.length} 題 ›</b></div>
       </div>
+      <div class="card">
+        <div class="mlink" data-act="sync-settings"><span>☁️ 雲端同步</span><b>${syncUid?('已連線 · '+esc(syncUid)):'點此設定 ›'}</b></div>
+        ${syncOn&&syncUid?'<div class="mlink" data-act="sync-now"><span>🔄 立即雙向同步</span><b>›</b></div>':''}
+        ${syncOn&&syncUid?'<div class="mlink" data-act="sync-diag"><span>🔍 同步診斷</span><b>›</b></div>':''}
+        ${syncOn&&syncUid?'<div class="sync-stat">'+syncStatus()+'</div>':''}
+        ${syncUid?'<div class="sync-code">同步碼：<code>'+esc(syncUid)+'</code> <span class="sync-copy" data-act="sync-copy">複製</span></div>':''}
+        ${!syncUid?'<div class="sync-note">首次請點上方「雲端同步」設定：選 Supabase（零自託管，推薦）或自架伺服器。</div>':''}
+      </div>
       <div class="card"><div class="mlink" data-act="reset"><span>🗑️ 重置進度</span><b>›</b></div></div>
       <div class="about">
         <div>HKSI 卷一 學習打卡 · H5 原型</div>
         <div>題庫來源：證券考試內容 IMA 知識庫（1595 題）</div>
-        <div>數據僅存於本機瀏覽器，清除快取會遺失。</div>
+        <div>${syncOn&&syncUid?('進度已統一儲存於'+(syncMode==='supabase'?'Supabase 雲端':'同步伺服器')+'，跨裝置不流失。'):(syncUid?'已設定同步碼，下次進入將自動同步。':'未連接雲端同步，進度僅存本機，清除快取會遺失。')}</div>
       </div>`);
   }
   function goWrong(){
+    curView='wrong';
     setActive('me');
     if(!state.wrong.length){setScreen(`<div class="phead"><button class="back" data-act="tab" data-tab="me">←</button>錯題本</div><div class="empty">暫無錯題，繼續練習吧！</div>`);return;}
     let items='';state.wrong.forEach(k=>{const q=getQ(k);if(!q)return;items+=`<div class="witem">${esc(q.stem.slice(0,64))}${q.stem.length>64?'…':''}</div>`;});
@@ -508,6 +775,7 @@
       <div class="wlist">${items}</div>`);
   }
   function goFav(){
+    curView='fav';
     setActive('me');
     if(!state.fav.length){setScreen(`<div class="phead"><button class="back" data-act="tab" data-tab="me">←</button>收藏夾</div><div class="empty">暫無收藏。</div>`);return;}
     let items='';state.fav.forEach(k=>{const q=getQ(k);if(!q)return;items+=`<div class="witem">${esc(q.stem.slice(0,64))}${q.stem.length>64?'…':''}</div>`;});
@@ -519,6 +787,7 @@
   // ---------- quiz ----------
   function startQuiz(list,mode,title,startIdx){
     startIdx=startIdx||0;
+    curView='quiz';
     quiz={mode,title,questions:list,idx:startIdx,selections:[],answeredFlags:list.map(()=>false),results:list.map(()=>null),startTs:Date.now(),remain:5400,timer:null};
     if(mode==='mock'){
       quiz.timer=setInterval(()=>{
@@ -529,6 +798,7 @@
     renderQuiz(false);
   }
   function renderQuiz(){
+    curView='quiz';
     const q=quiz.questions[quiz.idx];const isMulti=q.type==='multiple';const answered=quiz.answeredFlags[quiz.idx];
     let opts='';
     q.options.forEach(o=>{
@@ -542,8 +812,14 @@
     let fbHtml='';
     if(answered){
       const ok=quiz.results[quiz.idx];
+      const topicHtml=q.topic?`<div class="qtopic">🏷 知識點：${esc(q.topic)}</div>`:'';
+      const oralHtml=q.oral?`<div class="oral"><b>💬 大白話解析：</b><p>${esc(q.oral)}</p></div>`:'';
+      const trapHtml=(!ok&&q.trap)?`<div class="trapbox">🔍 <b>這題的陷阱：</b>${esc(q.trap)}</div>`:'';
       fbHtml=`<div class="feedback ${ok?'ok':'no'}">${ok?'✓ 答對了':'✗ 答錯了'}　正確答案：${q.answer.join('、')}</div>
-        <div class="exp"><b>解析：</b>${esc(q.explanation)}</div>
+        ${topicHtml}
+        ${oralHtml}
+        ${q.explanation?`<details class="exp"><summary>📖 原版解析（條文／課本說法）</summary>${esc(q.explanation)}</details>`:''}
+        ${trapHtml}
         <button class="favbtn ${favOn?'on':''}" data-act="fav-toggle" data-key="${key}">${favOn?'★ 已收藏':'☆ 收藏'}</button>`;
     }
     const actionBtn=answered
@@ -572,6 +848,7 @@
   }
   function nextQ(){quiz.idx++;quiz.selections=[];if(quiz.idx>=quiz.questions.length)renderSummary();else renderQuiz();}
   function renderSummary(){
+    curView='summary';
     if(quiz.timer)clearInterval(quiz.timer);
     let c=0;quiz.results.forEach(r=>{if(r)c++;});
     const n=quiz.questions.length;const acc=n?c/n:0;const sec=Math.round((Date.now()-quiz.startTs)/1000);
@@ -602,7 +879,7 @@
     if(act==='plan'){goPlan();return;}
     if(act==='plan-day'){const id=a.dataset.pid;if(state.planDone[id])delete state.planDone[id];else state.planDone[id]=true;save();goPlan();return;}
     if(act==='checkin'){const t=todayStr();if(!state.checkins.includes(t)){state.checkins.push(t);save();}goHome();toast('打卡成功 🎉');return;}
-    if(act==='tab'){const t=a.dataset.tab;if(t==='home')goHome();else if(t==='practice')goPractice();else if(t==='stats')goStats();else if(t==='me')goMe();else if(t==='wrong')goWrong();else if(t==='fav')goFav();return;}
+    if(act==='tab'){const t=a.dataset.tab;curTab=t;if(t==='home')goHome();else if(t==='practice')goPractice();else if(t==='stats')goStats();else if(t==='me')goMe();else if(t==='wrong')goWrong();else if(t==='fav')goFav();return;}
     if(act==='start-chapter'){goChapterList(+a.dataset.ch);return;}
     if(act==='chapter-filter'){goChapterList(+a.dataset.ch,a.dataset.f);return;}
     if(act==='ql-item'){const ch=+a.dataset.ch;const i=+a.dataset.idx;const c=QBANK.chapters.find(x=>x.id===ch);startQuiz(lastChList,'chapter',c.title+' · 練習',i);return;}
@@ -622,7 +899,44 @@
     if(act==='fav-toggle'){const k=a.dataset.key;if(state.fav.includes(k))state.fav=state.fav.filter(x=>x!==k);else state.fav.push(k);save();renderQuiz();return;}
     if(act==='quiz-exit'){if(quiz&&quiz.timer)clearInterval(quiz.timer);goHome();return;}
     if(act==='reset'){if(confirm('確定重置所有答題 / 打卡 / 錯題 / 收藏？')){state={answered:{},wrong:[],fav:[],checkins:[]};save();goMe();toast('已重置');}return;}
+    if(act==='sync-settings'){ showSyncSetup(!!syncUid); return; }
+    if(act==='sync-now'){ fullSync(); return; }
+    if(act==='sync-diag'){ showSyncDiag(); return; }
+    if(act==='sync-copy'){ const v=syncUid; if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(v).then(()=>toast('已複製同步碼')).catch(()=>toast('複製失敗，請手動選取'));}else{toast('請長按同步碼手動複製');} return; }
   });
+
+  // 回到頁面 / 切回分頁時立即下拉一次，讓同步「近乎即時」而非等 15 秒
+  document.addEventListener('visibilitychange',()=>{ if(!document.hidden&&syncOn&&syncUid) pullSync(null,false); });
+  window.addEventListener('focus',()=>{ if(syncOn&&syncUid) pullSync(null,false); });
+
+  function showSyncDiag(){
+    const ov=document.createElement('div'); ov.className='sync-modal';
+    ov.innerHTML=`<div class="sync-card">
+      <div class="sync-h">🔍 同步診斷</div>
+      <div id="diagOut" class="diag-out">測試中…</div>
+      <button class="ghost wide" id="diagClose">關閉</button>
+    </div>`;
+    document.body.appendChild(ov);
+    ov.querySelector('#diagClose').onclick=()=>ov.remove();
+    const out=ov.querySelector('#diagOut'); const set=s=>out.innerHTML=s;
+    if(!syncOn||!syncUid){set('❌ 尚未連接：請先於「我的 › 雲端同步」設定同步碼與後端');return;}
+    set('同步碼：<code>'+esc(syncUid)+'</code><br>模式：'+(syncMode==='supabase'?'Supabase':'自架伺服器')+'<br>測試連線中…');
+    if(syncMode==='supabase'){
+      supaSelect(syncUid).then(arr=>{
+        if(arr&&arr.length&&arr[0]&&arr[0].data){
+          const d=arr[0].data||{}; const n=d.answered?Object.keys(d.answered).length:0;
+          set('✅ 連線成功<br>雲端儲存題數：<b>'+n+'</b><br>本機題數：<b>'+Object.keys(state.answered||{}).length+'</b><br><br>若兩者不同，點「立即雙向同步」或等 15 秒自動下拉即可收斂。<br>⚠️ 兩台裝置的「同步碼」必須完全相同才會同步到同一份資料。');
+        } else {
+          set('⚠️ 連線成功，但雲端尚無此同步碼的資料（本機尚未上傳過）。點「立即雙向同步」上傳本機進度。');
+        }
+      }).catch(e=>{ set('❌ 連線失敗：'+(e&&e.message||e)+'<br>請檢查 Supabase 網址/金鑰，並確認 progress 表已建且 RLS 已關閉。'); });
+    } else {
+      fetch((syncBase||'')+'/api/progress?uid='+encodeURIComponent(syncUid)).then(r=>r.ok?r.json():null).then(j=>{
+        if(j&&j.data){const n=Object.keys(j.data.answered||{}).length;set('✅ 連線成功<br>雲端題數：<b>'+n+'</b>　本機題數：<b>'+Object.keys(state.answered||{}).length+'</b>');}
+        else set('⚠️ 連線成功但雲端無此碼資料，點「立即雙向同步」上傳。');
+      }).catch(()=>set('❌ 連線失敗：請檢查同步伺服器網址/HTTPS。'));
+    }
+  }
 
   boot();
 })();
