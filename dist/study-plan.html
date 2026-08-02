@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>HKSI 卷一 · 7 週衝刺打卡計劃表</title>
+<style>
+  :root{
+    --bg:#0f1419; --panel:#171f29; --panel2:#1d2733; --line:#2a3645;
+    --txt:#e6edf3; --mut:#8b9bb0; --acc:#4aa8ff; --acc2:#3ddc84;
+    --hi:#ff6b6b; --mid:#ffb454; --lo:#7c8aa0;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:-apple-system,"PingFang TC","Microsoft JhengHei",Segoe UI,Roboto,sans-serif;
+    background:var(--bg);color:var(--txt);line-height:1.5;padding-bottom:60px}
+  header{position:sticky;top:0;z-index:20;background:linear-gradient(180deg,#11181f,#0f1419);
+    border-bottom:1px solid var(--line);padding:14px 18px}
+  .htop{display:flex;flex-wrap:wrap;align-items:baseline;gap:10px}
+  h1{font-size:20px;font-weight:700;letter-spacing:.5px}
+  .sub{color:var(--mut);font-size:13px}
+  .exam{margin-left:auto;background:var(--panel2);border:1px solid var(--line);
+    padding:6px 12px;border-radius:999px;font-size:13px;color:var(--acc)}
+  .statbar{display:flex;gap:14px;flex-wrap:wrap;margin-top:12px;align-items:center}
+  .progress-wrap{flex:1;min-width:220px}
+  .progress-label{display:flex;justify-content:space-between;font-size:12px;color:var(--mut);margin-bottom:5px}
+  .bar{height:10px;background:var(--panel2);border-radius:999px;overflow:hidden;border:1px solid var(--line)}
+  .bar>span{display:block;height:100%;width:0;background:linear-gradient(90deg,var(--acc),var(--acc2));transition:width .35s}
+  .chip{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:6px 12px;font-size:13px}
+  .chip b{color:var(--acc2);font-size:16px}
+  .btn{background:var(--panel2);border:1px solid var(--line);color:var(--mut);border-radius:8px;
+    padding:6px 10px;font-size:12px;cursor:pointer}
+  .btn:hover{color:var(--txt);border-color:var(--acc)}
+  main{max-width:960px;margin:0 auto;padding:18px}
+  .legend{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px;font-size:12px;color:var(--mut)}
+  .legend i{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:5px;vertical-align:middle}
+  .week{background:var(--panel);border:1px solid var(--line);border-radius:14px;margin-bottom:18px;overflow:hidden}
+  .whead{display:flex;align-items:center;gap:12px;padding:14px 16px;background:var(--panel2);border-bottom:1px solid var(--line)}
+  .phase{font-weight:700;font-size:15px}
+  .wrange{color:var(--mut);font-size:13px}
+  .wprog{margin-left:auto;font-size:12px;color:var(--mut)}
+  .wprog b{color:var(--acc2)}
+  .day{display:flex;gap:12px;padding:11px 16px;border-bottom:1px solid #1c2630;align-items:flex-start;cursor:pointer;user-select:none}
+  .day:hover{background:rgba(74,168,255,.06)}
+  .day:last-child{border-bottom:none}
+  .day.done{background:rgba(61,220,132,.05)}
+  .ck{appearance:none;width:20px;height:20px;border:2px solid var(--line);border-radius:6px;flex:0 0 auto;
+    margin-top:2px;cursor:pointer;position:relative;background:var(--panel2)}
+  .ck:checked{background:var(--acc2);border-color:var(--acc2)}
+  .ck:checked::after{content:"✓";position:absolute;inset:0;color:#0f1419;font-size:14px;font-weight:800;
+    display:flex;align-items:center;justify-content:center}
+  .dbody{flex:1}
+  .dmeta{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:3px}
+  .date{font-weight:600;font-size:13px}
+  .wd{color:var(--mut);font-size:12px}
+  .chap{font-size:12px;color:var(--acc);background:rgba(74,168,255,.1);border:1px solid rgba(74,168,255,.25);
+    padding:1px 8px;border-radius:999px}
+  .prio{font-size:11px;padding:1px 8px;border-radius:999px;font-weight:600}
+  .p-hi{color:var(--hi);background:rgba(255,107,107,.12);border:1px solid rgba(255,107,107,.3)}
+  .p-mid{color:var(--mid);background:rgba(255,180,84,.12);border:1px solid rgba(255,180,84,.3)}
+  .p-lo{color:var(--lo);background:rgba(124,138,160,.12);border:1px solid rgba(124,138,160,.3)}
+  .task{font-size:13.5px;color:#d4dde7}
+  .streak-note{font-size:12px;color:var(--mut);margin:4px 0 18px;text-align:center}
+  footer{text-align:center;color:var(--mut);font-size:12px;padding:10px}
+  @media(max-width:560px){.exam{margin-left:0}.htop{flex-direction:column;gap:4px}}
+</style>
+</head>
+<body>
+<header>
+  <div class="htop">
+    <h1>HKSI 卷一 · 7 週衝刺打卡計劃表</h1>
+    <span class="sub">基本證券及期貨規例 · 60 題 / 90 分鐘 / 及格 70%（42/60）</span>
+    <span class="exam">🎯 目標考試日：2026-09-15</span>
+  </div>
+  <div class="statbar">
+    <div class="progress-wrap">
+      <div class="progress-label"><span>總進度</span><span id="ovText">0 / 0（0%）</span></div>
+      <div class="bar"><span id="ovBar"></span></div>
+    </div>
+    <div class="chip">已打卡 <b id="ckDays">0</b> 天</div>
+    <div class="chip">最長連續 <b id="streak">0</b> 天</div>
+    <button class="btn" id="resetBtn">重置進度</button>
+  </div>
+</header>
+
+<main>
+  <div class="legend">
+    <span><i style="background:#ff6b6b"></i>高優先（3/4/5/9 章，得分主戰場）</span>
+    <span><i style="background:#ffb454"></i>中優先</span>
+    <span><i style="background:#7c8aa0"></i>低優先</span>
+  </div>
+  <div id="weeks"></div>
+  <div class="streak-note" id="streakNote"></div>
+</main>
+
+<footer>進度自動儲存於本機瀏覽器（localStorage）。勾選每日任務即完成打卡。</footer>
+
+<script>
+const WEEKS = [
+  { phase:"階段一 · 基礎鞏固（建框架）", range:"W1 · 7/26 – 8/1",
+    days:[
+      {date:"2026-07-26",wd:"日",chap:"總覽 + 第1章",prio:"lo",task:"制定學習節奏；精讀第1章《香港金融業監督概覽》— SFC / HKMA / 強積金局監管架構、分工與職能。"},
+      {date:"2026-07-27",wd:"一",chap:"第2章",prio:"lo",task:"《相關香港法例及新公司條例》— 公司條例、私隱條例、放債人條例要點。"},
+      {date:"2026-07-28",wd:"二",chap:"第3章（上）",prio:"hi",task:"《證券及期貨條例 SFO》— 條例目的、證監會職能、註冊制的基礎概念。"},
+      {date:"2026-07-29",wd:"三",chap:"第3章（下）",prio:"hi",task:"SFO 核心條文 — 市場失當、披露義務、調查與紀律處分機制。"},
+      {date:"2026-07-30",wd:"四",chap:"第4章（上）",prio:"hi",task:"《發牌及註冊》— 10 類受規管活動、牌照類別、代表人與負責人員 (RO)。"},
+      {date:"2026-07-31",wd:"五",chap:"第4章（下）",prio:"hi",task:"發牌條件、持續責任、註冊紀錄冊與附屬法例（操守準則）。"},
+      {date:"2026-08-01",wd:"六",chap:"第5章（上）",prio:"hi",task:"《業務操守與客戶關係》— 認識你的客戶 (KYC)、風險承受能力評估。★ 週測驗 W1"}
+    ]},
+  { phase:"階段一 · 基礎鞏固（建框架）", range:"W2 · 8/2 – 8/8",
+    days:[
+      {date:"2026-08-02",wd:"日",chap:"第5章（下）",prio:"hi",task:"客戶資產保管、利益衝突、冷靜期與客戶協議。"},
+      {date:"2026-08-03",wd:"一",chap:"第6章",prio:"mid",task:"《業務運作與常規》— 內部監控、風險管理、合規职能。"},
+      {date:"2026-08-04",wd:"二",chap:"第7章",prio:"mid",task:"《在香港交易所的參與》— 聯交所 / 結算所、交易所參與者類別。"},
+      {date:"2026-08-05",wd:"三",chap:"第8章",prio:"mid",task:"《取得公開資本》— 上市規則、招股章程、收購合併守則。"},
+      {date:"2026-08-06",wd:"四",chap:"第9章（上）",prio:"hi",task:"《市場失當行為》— 內幕交易、虛假交易、操控市場的定義。"},
+      {date:"2026-08-07",wd:"五",chap:"第9章（下）",prio:"hi",task:"其他市場失當行為、洗錢及恐怖分子資金籌集 (AML/CFT)、失當審裁處。"},
+      {date:"2026-08-08",wd:"六",chap:"階段複習",prio:"mid",task:"通讀濃縮筆記，整理 1–9 章思維導圖；★ 週測驗 W2"}
+    ]},
+  { phase:"階段二 · 專題突破（攻主戰場）", range:"W3 · 8/9 – 8/15",
+    days:[
+      {date:"2026-08-09",wd:"日",chap:"第3章專題",prio:"hi",task:"SFO 專題刷題 + 錯題標記。"},
+      {date:"2026-08-10",wd:"一",chap:"第3章錯題",prio:"hi",task:"重做第3章錯題，歸納高頻考點。"},
+      {date:"2026-08-11",wd:"二",chap:"第4章專題",prio:"hi",task:"發牌 / RO / 持續責任專題刷題。"},
+      {date:"2026-08-12",wd:"三",chap:"第4章錯題",prio:"hi",task:"重做第4章錯題，整理「牌照 vs 註冊」對照表。"},
+      {date:"2026-08-13",wd:"四",chap:"第5章專題",prio:"hi",task:"操守準則 / KYC / 客戶資產專題刷題。"},
+      {date:"2026-08-14",wd:"五",chap:"第5章錯題",prio:"hi",task:"重做第5章錯題，背誦關鍵數值（冷靜期、期限）。"},
+      {date:"2026-08-15",wd:"六",chap:"模擬測驗",prio:"hi",task:"★ 限時模擬測驗 W3（60 題 / 90 分鐘），檢討錯題。"}
+    ]},
+  { phase:"階段二 · 專題突破（攻主戰場）", range:"W4 · 8/16 – 8/22",
+    days:[
+      {date:"2026-08-16",wd:"日",chap:"第9章專題",prio:"hi",task:"市場失當 / AML 專題刷題。"},
+      {date:"2026-08-17",wd:"一",chap:"第9章錯題",prio:"hi",task:"重做第9章錯題，梳理各類失當行為要件。"},
+      {date:"2026-08-18",wd:"二",chap:"第1/2章補強",prio:"lo",task:"補強中低優先章節，查漏補缺。"},
+      {date:"2026-08-19",wd:"三",chap:"第6/7/8章補強",prio:"mid",task:"運作常規 / 交易所 / 上市規則補強。"},
+      {date:"2026-08-20",wd:"四",chap:"混合刷題",prio:"hi",task:"高優先章（3/4/5/9）混合刷題。"},
+      {date:"2026-08-21",wd:"五",chap:"混合刷題",prio:"mid",task:"全章節混合刷題，統計分章正確率。"},
+      {date:"2026-08-22",wd:"六",chap:"階段評估",prio:"hi",task:"★ 週測驗 W4 + 階段評估，鎖定最弱章節。"}
+    ]},
+  { phase:"階段三 · 刷題強化（提速度）", range:"W5 · 8/23 – 8/29",
+    days:[
+      {date:"2026-08-23",wd:"日",chap:"混合 A",prio:"mid",task:"全章節混合刷題 A 卷。"},
+      {date:"2026-08-24",wd:"一",chap:"錯題二刷 A",prio:"hi",task:"錯題二刷，標記仍不穩定的題目。"},
+      {date:"2026-08-25",wd:"二",chap:"混合 B",prio:"mid",task:"全章節混合刷題 B 卷。"},
+      {date:"2026-08-26",wd:"三",chap:"錯題二刷 B",prio:"hi",task:"錯題二刷，建立「高頻錯題本」。"},
+      {date:"2026-08-27",wd:"四",chap:"2ce 練習",prio:"mid",task:"做 2ce 練習題，對照考點。"},
+      {date:"2026-08-28",wd:"五",chap:"歷屆試題",prio:"hi",task:"做 paper1_chi_v2 歷屆試題，感受真題語感。"},
+      {date:"2026-08-29",wd:"六",chap:"模擬測驗",prio:"hi",task:"★ 週測驗 W5（限時 60 題），檢討。"}
+    ]},
+  { phase:"階段三 · 刷題強化（提速度）", range:"W6 · 8/30 – 9/5",
+    days:[
+      {date:"2026-08-30",wd:"日",chap:"弱項專攻",prio:"hi",task:"依數據專攻最弱章節（通常為 3 / 4 / 9）。"},
+      {date:"2026-08-31",wd:"一",chap:"弱項專攻",prio:"hi",task:"繼續弱項專攻，背誦條文數值。"},
+      {date:"2026-09-01",wd:"二",chap:"混合 C",prio:"mid",task:"全章節混合刷題 C 卷。"},
+      {date:"2026-09-02",wd:"三",chap:"錯題三刷",prio:"hi",task:"錯題三刷，目標正確率 ≥ 85%。"},
+      {date:"2026-09-03",wd:"四",chap:"補漏",prio:"mid",task:"2ce / 歷屆補漏，掃清剩餘盲點。"},
+      {date:"2026-09-04",wd:"五",chap:"速記",prio:"mid",task:"速記濃縮筆記與思維導圖。"},
+      {date:"2026-09-05",wd:"六",chap:"階段評估",prio:"hi",task:"★ 週測驗 W6 + 階段評估，確認達 80%+。"}
+    ]},
+  { phase:"階段四 · 模考衝刺（調狀態）", range:"W7 · 9/6 – 9/15",
+    days:[
+      {date:"2026-09-06",wd:"日",chap:"官網模考",prio:"hi",task:"★ 官網 60 題模考（嚴格限時 90 分鐘）。"},
+      {date:"2026-09-07",wd:"一",chap:"模考檢討",prio:"hi",task:"逐題檢討模考，錯題回歸對應章節。"},
+      {date:"2026-09-08",wd:"二",chap:"弱項回補",prio:"hi",task:"針對模考弱項回補。"},
+      {date:"2026-09-09",wd:"三",chap:"速記 3/4/5",prio:"hi",task:"第 3/4/5 章高頻考點速記。"},
+      {date:"2026-09-10",wd:"四",chap:"速記 9/其他",prio:"mid",task:"第 9 章 + 其餘章節速記。"},
+      {date:"2026-09-11",wd:"五",chap:"第二次模考",prio:"hi",task:"★ 第二次限時模考（60 題），目標 ≥ 85%。"},
+      {date:"2026-09-12",wd:"六",chap:"模考檢討",prio:"hi",task:"第二次模考檢討，最後清錯題。"},
+      {date:"2026-09-13",wd:"日",chap:"總回顧",prio:"mid",task:"濃縮筆記總回顧，過一遍思維導圖。"},
+      {date:"2026-09-14",wd:"一",chap:"調整狀態",prio:"lo",task:"輕鬆複習，調整作息與心態。"},
+      {date:"2026-09-15",wd:"二",chap:"應試",prio:"hi",task:"🎯 應試日！帶備身份證與準考通知，穩定發揮。"}
+    ]}
+];
+
+const KEY="hksi_study_plan_v1";
+// 安全儲存：預覽沙箱若禁用 localStorage，自動降級為記憶體模式（頁面仍可正常打卡）
+const store=(()=>{ 
+  try{ const t="__probe__"; localStorage.setItem(t,"1"); localStorage.removeItem(t); return localStorage; }
+  catch(e){ const m={}; return { getItem:k=>(k in m?m[k]:null), setItem:(k,v)=>{m[k]=String(v);}, removeItem:k=>{delete m[k];} }; }
+})();
+let state;
+try{ state = JSON.parse(store.getItem(KEY) || "{}"); }catch(e){ state = {}; }
+if(!state.done) state.done={};
+
+function dayId(wi,di){return "w"+wi+"d"+di;}
+function fmtDate(d){return d.slice(5).replace("-","/");}
+
+function render(){
+  const root=document.getElementById("weeks");
+  root.innerHTML="";
+  let total=0, doneTotal=0;
+  WEEKS.forEach((w,wi)=>{
+    const card=document.createElement("div");
+    card.className="week";
+    const doneInWeek=w.days.filter((_,di)=>state.done[dayId(wi,di)]).length;
+    card.innerHTML=`<div class="whead">
+        <span class="phase">${w.phase}</span>
+        <span class="wrange">${w.range}</span>
+        <span class="wprog"><b>${doneInWeek}</b> / ${w.days.length} 天完成</span>
+      </div>`;
+    w.days.forEach((d,di)=>{
+      total++;
+      const id=dayId(wi,di);
+      const isDone=!!state.done[id];
+      if(isDone) doneTotal++;
+      const row=document.createElement("div");
+      row.className="day"+(isDone?" done":"");
+      row.dataset.id=id;
+      const prioClass = d.prio==="hi"?"p-hi":d.prio==="mid"?"p-mid":"p-lo";
+      const prioText = d.prio==="hi"?"高優先":d.prio==="mid"?"中優先":"低優先";
+      row.innerHTML=`
+        <input type="checkbox" class="ck" data-id="${id}" ${isDone?"checked":""}>
+        <div class="dbody">
+          <div class="dmeta">
+            <span class="date">${fmtDate(d.date)}</span>
+            <span class="wd">${d.wd}</span>
+            <span class="chap">${d.chap}</span>
+            <span class="prio ${prioClass}">${prioText}</span>
+          </div>
+          <div class="task">${d.task}</div>
+        </div>`;
+      card.appendChild(row);
+    });
+    root.appendChild(card);
+  });
+
+  // overall
+  const pct = total? Math.round(doneTotal/total*100):0;
+  document.getElementById("ovText").textContent=`${doneTotal} / ${total}（${pct}%）`;
+  document.getElementById("ovBar").style.width=pct+"%";
+
+  // streak
+  const doneDates=Object.keys(state.done).filter(k=>state.done[k])
+    .map(k=>{const [w,d]=k.slice(1).split("d").map(Number);return WEEKS[w].days[d].date;})
+    .sort();
+  document.getElementById("ckDays").textContent=doneDates.length;
+  document.getElementById("streak").textContent=longestStreak(doneDates);
+  document.getElementById("streakNote").textContent=
+    doneDates.length? `已打卡 ${doneDates.length} 天，保持節奏，臨近考試日衝刺最有效！` : `尚未開始打卡，勾選今天的任務即可記錄第一個學習日。`;
+}
+
+function longestStreak(dates){
+  if(!dates.length) return 0;
+  let best=1,cur=1;
+  for(let i=1;i<dates.length;i++){
+    const prev=new Date(dates[i-1]), curd=new Date(dates[i]);
+    const diff=(curd-prev)/86400000;
+    if(diff===1) cur++; else if(diff>1) cur=1;
+    if(cur>best) best=cur;
+  }
+  return best;
+}
+
+function toggle(id){
+  if(state.done[id]) delete state.done[id]; else state.done[id]=true;
+  try{ store.setItem(KEY,JSON.stringify(state)); }catch(e){}
+  render();
+}
+// 整行可點：點擊任務行任何位置都能打卡（不只小勾選框）
+document.addEventListener("click",e=>{
+  const row=e.target.closest(".day");
+  if(row && row.dataset.id){
+    // 若點的是 checkbox 本身，交給 change 事件避免重複切換
+    if(e.target.classList.contains("ck")) return;
+    toggle(row.dataset.id);
+  }
+});
+document.addEventListener("change",e=>{
+  if(e.target.classList.contains("ck")) toggle(e.target.dataset.id);
+});
+document.getElementById("resetBtn").addEventListener("click",e=>{
+  e.stopPropagation();
+  if(confirm("確定要清除所有打卡進度嗎？")){state.done={};try{store.setItem(KEY,JSON.stringify(state));}catch(err){}render();}
+});
+
+render();
+</script>
+</body>
+</html>

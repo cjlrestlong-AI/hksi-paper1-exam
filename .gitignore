@@ -1,0 +1,9 @@
+# WorkBuddy internal (personal memory notes, raw pipeline data, local tooling)
+.workbuddy/
+
+# macOS
+.DS_Store
+
+# Runtime artifacts (sync server data + logs)
+deploy/.data/
+deploy/server.log
