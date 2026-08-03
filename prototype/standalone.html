@@ -125,6 +125,44 @@
   .stats-si{background:#10161e;border-radius:10px;padding:10px 8px;text-align:center}
   .stats-si b{font-size:19px;color:var(--acc);display:block;line-height:1.2}
   .stats-si span{font-size:10.5px;color:var(--mut);margin-top:2px;display:block}
+  /* ===== 答題動效：粒子與彩帶 ===== */
+  .fx-part{position:absolute;width:7px;height:7px;border-radius:50%;pointer-events:none;z-index:99;animation:fxFly .85s ease-out forwards}
+  @keyframes fxFly{0%{transform:translate(0,0) scale(1);opacity:1}100%{transform:translate(var(--dx),var(--dy)) scale(.2);opacity:0}}
+  .fx-confetti{position:absolute;top:-14px;width:8px;height:14px;border-radius:2px;pointer-events:none;z-index:99;animation:fxFall linear forwards}
+  @keyframes fxFall{0%{transform:translateY(0) rotate(0)}100%{transform:translateY(720px) rotate(720deg);opacity:.85}}
+  /* ===== 講義複習計時徽章 ===== */
+  .study-timer-badge{margin-left:auto;font-size:11.5px;color:var(--acc);background:rgba(7,193,96,.1);border:1px solid rgba(7,193,96,.3);padding:2px 9px;border-radius:99px;font-weight:600}
+  /* ===== 答題反饋設置（開關＋音量滑桿）===== */
+  .fx-row{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:9px 0;border-bottom:1px solid rgba(39,49,61,.5);font-size:13.5px}
+  .fx-row:last-of-type{border-bottom:none}
+  .fx-row .fx-vol{color:var(--acc)}
+  .fx-vol-slider{flex:0 0 110px;accent-color:var(--acc);height:4px;cursor:pointer}
+  .fx-note{font-size:11px;color:var(--mut);margin-top:8px}
+  .sw{position:relative;display:inline-block;width:42px;height:24px;flex:0 0 auto;cursor:pointer}
+  .sw input{opacity:0;width:0;height:0;position:absolute}
+  .sw i{position:absolute;inset:0;background:#2a3441;border-radius:99px;transition:.25s}
+  .sw i:before{content:'';position:absolute;left:3px;top:3px;width:18px;height:18px;border-radius:50%;background:#8b9bb0;transition:.25s}
+  .sw input:checked+i{background:rgba(7,193,96,.5)}
+  .sw input:checked+i:before{transform:translateX(18px);background:var(--acc)}
+  /* ===== 複習月曆 ===== */
+  .cal-card .ct{margin-bottom:8px}
+  .cal-legend{display:flex;gap:12px;font-size:11px;color:var(--mut);margin:4px 0 8px;flex-wrap:wrap}
+  .cal-legend i{display:inline-block;width:11px;height:11px;border-radius:3px;margin-right:4px;vertical-align:-1px}
+  .lg-done{background:var(--acc)}.lg-partial{background:rgba(255,180,84,.55)}.lg-none{background:#1d2731}
+  .cal-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:4px}
+  .cal-cell{position:relative;background:#10161e;border:1px solid var(--line);border-radius:8px;min-height:44px;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:3px 0;box-sizing:border-box}
+  .cal-d{font-size:12px;color:#cdd8e3;font-weight:600}
+  .cal-m{font-size:8.5px;color:var(--mut);margin-top:1px;white-space:nowrap}
+  .cal-cell.cal-done{background:rgba(7,193,96,.16);border-color:rgba(7,193,96,.55)}
+  .cal-cell.cal-done .cal-d{color:var(--acc);font-weight:800}
+  .cal-cell.cal-partial{background:rgba(255,180,84,.1);border-color:rgba(255,180,84,.4)}
+  .cal-cell.cal-partial .cal-d{color:var(--warn)}
+  .cal-cell.cal-today{outline:2px solid var(--acc2);outline-offset:-1px}
+  .cal-flag{position:absolute;top:2px;right:3px;font-size:9px;color:var(--acc)}
+  .cal-empty{background:transparent;border-color:transparent}
+  .cal-sum{display:flex;justify-content:space-between;gap:6px;margin-top:10px;font-size:12px;color:var(--mut);flex-wrap:wrap}
+  .cal-sum b{color:var(--acc)}
+  .cal-note{font-size:10.5px;color:var(--mut);margin-top:6px;line-height:1.5}
   /* chapter mastery – two-row card layout */
   .chrow{margin-bottom:14px;padding:12px 14px;background:rgba(21,30,42,.5);border-radius:12px;border:1px solid rgba(39,49,61,.6)}
   .chrow-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
@@ -538,8 +576,104 @@
   if(!state.fav)state.fav=[];
   if(!state.checkins)state.checkins=[];
   if(!state.planDone)state.planDone={};
-
+  // ===== 功能設定與複習計時狀態 =====
+  // fx: {sfx:布林 音效, anim:布林 動效, vol:0~1 音量}
+  if(!state.fx||typeof state.fx!=='object')state.fx={sfx:true,anim:true,vol:0.7};
+  if(typeof state.fx.sfx!=='boolean')state.fx.sfx=true;
+  if(typeof state.fx.anim!=='boolean')state.fx.anim=true;
+  if(typeof state.fx.vol!=='number')state.fx.vol=0.7;
+  // study: {dateStr:{minutes:number, chapters:{chId:minutes}}}  每日複習時長（分鐘）與各章時長
+  if(!state.study||typeof state.study!=='object')state.study={};
+  // 連對彩蛋計數器
+  let fxStreak=0;
+  // 複習計時器狀態
+  let studyTimer=null, studyStart=0, studyCh=null;
   function todayStr(){const d=new Date();return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');}
+  // ---- 複習計時：開啟講義開始、離開停止，累計到 state.study ----
+  function studyStartTimer(ch){
+    if(studyTimer){studyStopTimer();}
+    studyCh=ch; studyStart=Date.now();
+    studyTimer=setInterval(()=>{
+      // 每秒累計（用「已過秒數」計算，避免 setInterval 漂移）
+      const secs=Math.round((Date.now()-studyStart)/1000);
+      const mins=Math.round(secs/60*10)/10;
+      el('study-timer')&&(el('study-timer').textContent=mins.toFixed(1)+' 分鐘');
+    },1000);
+  }
+  function studyStopTimer(){
+    if(!studyTimer||studyCh==null)return;
+    const secs=Math.round((Date.now()-studyStart)/1000);
+    if(secs>=5){  // 少於 5 秒不計
+      const d=todayStr();const mins=Math.round(secs/6)/10;  // 每 6 秒 = 0.1 分鐘
+      if(!state.study[d])state.study[d]={minutes:0,chapters:{}};
+      state.study[d].minutes=Math.round((state.study[d].minutes+mins)*10)/10;
+      const chk='ch'+studyCh;
+      state.study[d].chapters[chk]=(state.study[d].chapters[chk]||0)+mins;
+      save();
+    }
+    clearInterval(studyTimer);studyTimer=null;studyCh=null;
+  }
+  // 離開頁面/切分頁時自動停止計時
+  document.addEventListener('visibilitychange',()=>{if(document.hidden)studyStopTimer();});
+  window.addEventListener('pagehide',()=>studyStopTimer());
+  // ---- 音效引擎（Web Audio API 合成，無需外部音檔）----
+  let audioCtx=null;
+  function ensureAudio(){try{if(!audioCtx)audioCtx=new (window.AudioContext||window.webkitAudioContext)();if(audioCtx.state==='suspended')audioCtx.resume();}catch(e){}}
+  function tone(freq,dur,type,delay,volMul){
+    if(!state.fx.sfx)return;
+    try{
+      ensureAudio();
+      const t=audioCtx.currentTime+(delay||0);
+      const o=audioCtx.createOscillator(),g=audioCtx.createGain();
+      o.type=type||'sine';o.frequency.value=freq;
+      g.gain.setValueAtTime(0.0001,t);
+      g.gain.exponentialRampToValueAtTime((state.fx.vol||0.7)*(volMul||1),t+0.02);
+      g.gain.exponentialRampToValueAtTime(0.0001,t+dur);
+      o.connect(g);g.connect(audioCtx.destination);
+      o.start(t);o.stop(t+dur+0.05);
+    }catch(e){}
+  }
+  function sfxCorrect(){tone(660,0.12,'sine',0,1);tone(880,0.18,'sine',0.09,1);tone(1320,0.22,'sine',0.18,0.9);}
+  function sfxWrong(){tone(330,0.22,'sine',0,0.5);tone(262,0.28,'sine',0.14,0.45);}
+  function sfxStreak(n){
+    if(n>=20){tone(523,0.12,'triangle',0,1);tone(659,0.12,'triangle',0.1,1);tone(784,0.12,'triangle',0.2,1);tone(1047,0.3,'triangle',0.3,1);}
+    else if(n>=10){tone(523,0.12,'triangle',0,1);tone(659,0.12,'triangle',0.12,1);tone(784,0.25,'triangle',0.24,1);}
+    else if(n>=5){tone(659,0.12,'triangle',0,1);tone(880,0.25,'triangle',0.13,1);}
+  }
+  // ---- 答題動效 ----
+  function fxBurst(ok){
+    if(!state.fx.anim)return;
+    const s=el('screen');if(!s)return;
+    const r=s.getBoundingClientRect();
+    const cx=r.width/2, cy=r.height*0.3;
+    const colors=ok?['#07c160','#4aa8ff','#ffb454','#7bed9f','#fff']:['#ff6b6b','#ff9a9a','#8b9bb0'];
+    for(let i=0;i<(ok?26:10);i++){
+      const p=document.createElement('div');
+      p.className='fx-part';
+      p.style.left=cx+'px';p.style.top=cy+'px';
+      p.style.background=colors[i%colors.length];
+      const ang=Math.random()*Math.PI*2, dist=60+Math.random()*110;
+      const dx=Math.cos(ang)*dist, dy=Math.sin(ang)*dist-40;
+      p.style.setProperty('--dx',dx+'px');p.style.setProperty('--dy',dy+'px');
+      s.appendChild(p);
+      setTimeout(()=>p.remove(),900);
+    }
+  }
+  function fxConfetti(){
+    if(!state.fx.anim)return;
+    const s=el('screen');if(!s)return;
+    const colors=['#07c160','#4aa8ff','#ffb454','#c792ea','#ff6b6b','#7bed9f'];
+    for(let i=0;i<40;i++){
+      const p=document.createElement('div');
+      p.className='fx-confetti';
+      p.style.left=(Math.random()*100)+'%';
+      p.style.background=colors[i%colors.length];
+      p.style.animationDelay=(Math.random()*0.5)+'s';
+      p.style.animationDuration=(1.2+Math.random()*1.2)+'s';
+      s.appendChild(p);
+      setTimeout(()=>p.remove(),2800);
+    }
+  }
   function esc(s){return (s||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));}
   function pad(n){return String(n).padStart(2,'0');}
   function fmtTime(sec){sec=Math.max(0,sec|0);const h=Math.floor(sec/3600),m=Math.floor((sec%3600)/60),s=sec%60;return h>0?h+':'+pad(m)+':'+pad(s):pad(m)+':'+pad(s);}
@@ -549,7 +683,6 @@
   function el(id){return document.getElementById(id);}
   function setScreen(html){const s=el('screen');s.innerHTML=html;s.scrollTop=0;}
   function setActive(tab){document.querySelectorAll('.tab').forEach(t=>t.classList.toggle('active',t.dataset.tab===tab));}
-
   function buildIndex(){
     KEY2Q={};
     QBANK.chapters.forEach(c=>c.questions.forEach(q=>{KEY2Q[q.id]=q;q._ch=c.id;}));
@@ -675,6 +808,75 @@
   function planDate(mmdd){const p=mmdd.split('-').map(Number);return new Date(2026,p[0]-1,p[1]);}
   const PLAN_FLAT=(()=>{const a=[];PLAN.forEach((w,wi)=>w.days.forEach((d,di)=>a.push({wi,di,id:'w'+wi+'d'+di,date:planDate(d.d),ch:d.ch,t:d.t,p:d.p})));return a;})();
   const PLAN_TOTAL=PLAN_FLAT.length;
+  // ---------- 複習月曆：每日時長 + 達標判定 + 週/月統計 ----------
+  // 計劃章節 → 對應章號集合（如「第3章(上)」→[3]、「第1/2章補強」→[1,2]、「混合刷題」→全部[1..9]）
+  function planChapters(chStr){
+    const s=chStr||'';
+    const nums=[];
+    const m=s.match(/\d+/g)||[];
+    m.forEach(x=>{const n=parseInt(x);if(n>=1&&n<=9)nums.push(n);});
+    if(nums.length===0)return [1,2,3,4,5,6,7,8,9];  // 階段複習/混合/速記等 → 任意章節皆可
+    return nums;
+  }
+  // 某日是否達標：有複習時長 且 當日讀過的章節 ∩ 計劃章節 ≠ ∅
+  function dayAchieved(dateStr){
+    const st=state.study[dateStr];
+    if(!st||!st.minutes||st.minutes<1)return false;
+    const pf=PLAN_FLAT.find(p=>p.date.getFullYear()===''+new Date(dateStr).getFullYear()&&
+      p.date.getMonth()===new Date(dateStr).getMonth()&&p.date.getDate()===new Date(dateStr).getDate());
+    if(!pf)return st.minutes>=1;  // 計劃外日期：有複習即算達標
+    const target=planChapters(pf.ch);
+    const read=Object.keys(st.chapters||{}).map(k=>parseInt((k||'').replace('ch',''))||0).filter(n=>n>=1&&n<=9);
+    return read.some(n=>target.includes(n));
+  }
+  // 週統計：最近 7 天複習分鐘
+  function weekStudyMins(){
+    let m=0;for(let i=0;i<7;i++){const d=new Date();d.setDate(d.getDate()-i);const ds=d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate());m+=(state.study[ds]&&state.study[ds].minutes)||0;}
+    return Math.round(m);
+  }
+  // 月統計：本月複習分鐘 + 達標天數
+  function monthStudy(){
+    const now=new Date();const ym=now.getFullYear()+'-'+pad(now.getMonth()+1);
+    let mins=0,doneDays=0,totalDays=0;
+    const dim=new Date(now.getFullYear(),now.getMonth()+1,0).getDate();
+    for(let day=1;day<=dim;day++){
+      const ds=ym+'-'+pad(day);const st=state.study[ds];
+      if(st&&st.minutes){mins+=st.minutes;totalDays++;if(dayAchieved(ds))doneDays++;}
+    }
+    return {mins:Math.round(mins),doneDays,totalDays};
+  }
+  // 生成月曆 HTML（以今天所在月份為主，前一/後一月可切換）
+  function calendarHTML(){
+    const now=new Date();
+    const y=now.getFullYear(),m=now.getMonth();
+    const ym=y+'-'+pad(m+1);
+    const first=new Date(y,m,1).getDay();  // 0=日
+    const dim=new Date(y,m+1,0).getDate();
+    const today=todayStr();
+    let cells='';
+    for(let i=0;i<first;i++)cells+='<div class="cal-cell cal-empty"></div>';
+    for(let day=1;day<=dim;day++){
+      const ds=ym+'-'+pad(day);
+      const st=state.study[ds];const mins=st?st.minutes:0;
+      const ach=dayAchieved(ds);
+      let cls='cal-cell';
+      if(ds===today)cls+=' cal-today';
+      if(ach)cls+=' cal-done';
+      else if(mins>0)cls+=' cal-partial';
+      cells+=`<div class="${cls}"><span class="cal-d">${day}</span>${mins>0?`<span class="cal-m">${Math.round(mins)}分</span>`:''}${ach?'<span class="cal-flag">✓</span>':''}</div>`;
+    }
+    const ms=monthStudy();
+    return `<div class="card cal-card"><div class="ct">📅 複習月曆 · ${y} 年 ${m+1} 月</div>
+      <div class="cal-legend"><span><i class="lg-done"></i>達標</span><span><i class="lg-partial"></i>有複習未達標</span><span><i class="lg-none"></i>未複習</span></div>
+      <div class="cal-grid">${cells}</div>
+      <div class="cal-sum">
+        <span>本月複習 <b>${ms.mins}</b> 分鐘</span>
+        <span>達標 <b>${ms.doneDays}</b> 天</span>
+        <span>本週 <b>${weekStudyMins()}</b> 分鐘</span>
+      </div>
+      <div class="cal-note">達標規則：當日有複習，且所讀章節與計劃表當日章節相符。</div>
+    </div>`;
+  }
   function estHours(d){
     const s=(d.ch||'')+(d.t||'');
     if(/模考|模擬|週測驗|測驗|應試/.test(s)) return 2;
@@ -778,7 +980,7 @@
   }
 
   function goPlan(){
-    curView='plan';
+    curView='plan';studyStopTimer();
     setActive('home');
     let total=0,done=0,html='';
     PLAN.forEach((w,wi)=>{
@@ -806,7 +1008,7 @@
 
   // ---------- chapter notes (講義) ----------
   function goNotes(){
-    curView='notes';
+    curView='notes';studyStopTimer();
     setActive('home');
     const N=window.NOTES||[];
     if(!N.length){setScreen('<div class="phead"><a data-act="tab" data-tab="home" class="pback">‹ 返回</a> 章節講義</div><div class="empty">講義資源未載入</div>');return;}
@@ -827,7 +1029,9 @@
     setActive('home');
     const N=window.NOTES||[];const n=N.find(x=>x.id===ch);
     if(!n){goNotes();return;}
-    setScreen(`<div class="phead"><a data-act="notes" class="pback">‹ 講義</a> 第${ch}章講義</div>
+    studyStartTimer(ch);  // 開啟講義 → 自動開始複習計時
+    setScreen(`<div class="phead"><a data-act="notes" class="pback">‹ 講義</a> 第${ch}章講義
+      <span class="study-timer-badge">📖 <span id="study-timer">0.0 分鐘</span></span></div>
       <div class="notewrap"><h1>第${ch}章 ${esc(n.title)}</h1>${n.html}</div>
       <button class="primary wide" data-act="start-chapter" data-ch="${ch}" style="margin-top:14px">📝 本章題目列表（全 ${(QBANK.chapters.find(x=>x.id===ch)||{questions:[]}).questions.length} 題）</button>
       <button class="ghost wide" data-act="notes" style="margin-bottom:16px">返回講義目錄</button>`);
@@ -836,7 +1040,7 @@
   // ---------- chapter question list (題目列表 + 作答進度) ----------
   function isAnswered(q){return !!state.answered[sessionKey(q)];}
   function goChapterList(ch, presetFilter){
-    curView='chlist';
+    curView='chlist';studyStopTimer();
     setActive('practice');
     curChId=ch; qlExpanded=false;
     const c=QBANK.chapters.find(x=>x.id===ch);
@@ -960,7 +1164,7 @@
   }
   // ---------- screens ----------
   function goHome(){
-    curView='home';
+    curView='home';studyStopTimer();
     setActive('home');
     const st=computeStats();const streak=longestStreak(state.checkins);const today=todayStr();
     const checked=state.checkins.includes(today);
@@ -987,7 +1191,7 @@
      <div class="planlink"><a data-act="plan">📋 查看 7 週打卡計劃表</a></div>`);
   }
   function goPractice(){
-    curView='practice';
+    curView='practice';studyStopTimer();
     setActive('practice');
     const st=computeStats();let rows='';
     QBANK.chapters.forEach(c=>{
@@ -1002,7 +1206,7 @@
     setScreen(`<div class="phead">章節練習</div><div class="chlist">${rows}</div>`);
   }
   function goStats(){
-    curView='stats';
+    curView='stats';studyStopTimer();
     setActive('stats');
     const st=computeStats();
     const total=st.total, correct=st.correct, wrong=total-correct;
@@ -1044,6 +1248,7 @@
         <div class="stats-kgrid">${kgrid}</div>
       </div>
       <div class="card"><div class="ct">📊 分章掌握度</div>${chrows}</div>
+      ${calendarHTML()}
       <div class="card trend-card"><div class="ct">📈 近 14 日趨勢</div>
         ${trend(st.daily)}
         <div class="trend-summary"><span>今日 ${todayV} 題</span><span>最高 ${maxV>0?maxV:'—'} 題</span></div>
@@ -1051,12 +1256,21 @@
       ${state.mockBest?'':'<div class="card" style="text-align:center;padding:16px;color:var(--mut);font-size:13px">完成一次模考後，這裡會顯示你的最佳成績 🎯</div>'}`);
   }
   function goMe(){
-    curView='me';
+    curView='me';studyStopTimer();
     setActive('me');
+    const fx=state.fx;
     setScreen(`<div class="phead">我的</div>
       <div class="card">
         <div class="mlink" data-act="tab" data-tab="wrong"><span>📕 錯題本</span><b>${state.wrong.length} 題 ›</b></div>
         <div class="mlink" data-act="tab" data-tab="fav"><span>⭐ 收藏夾</span><b>${state.fav.length} 題 ›</b></div>
+      </div>
+      <div class="card">
+        <div class="ct">🎮 答題反饋設定</div>
+        <div class="fx-row"><span>✅ 答對動效（打勾／粒子）</span><label class="sw"><input type="checkbox" data-act="fx-anim" ${fx.anim?'checked':''}><i></i></label></div>
+        <div class="fx-row"><span>🔊 答題音效</span><label class="sw"><input type="checkbox" data-act="fx-sfx" ${fx.sfx?'checked':''}><i></i></label></div>
+        <div class="fx-row"><span>🔈 音量 <b class="fx-vol">${Math.round(fx.vol*100)}%</b></span>
+          <input class="fx-vol-slider" type="range" min="0" max="100" value="${Math.round(fx.vol*100)}" data-act="fx-vol"></div>
+        <div class="fx-note">連續答對 5／10／20 題解鎖彩蛋 🎉</div>
       </div>
       <div class="card">
         <div class="mlink" data-act="sync-settings"><span>☁️ 雲端同步</span><b>${syncUid?('已連線 · '+esc(syncUid)):'點此設定 ›'}</b></div>
@@ -1074,7 +1288,7 @@
       </div>`);
   }
   function goWrong(){
-    curView='wrong';
+    curView='wrong';studyStopTimer();
     setActive('me');
     if(!state.wrong.length){setScreen(`<div class="phead"><button class="back" data-act="tab" data-tab="me">←</button>錯題本</div><div class="empty">暫無錯題，繼續練習吧！</div>`);return;}
     let items='';state.wrong.forEach(k=>{const q=getQ(k);if(!q)return;items+=`<div class="witem">${esc(q.stem.slice(0,64))}${q.stem.length>64?'…':''}</div>`;});
@@ -1083,7 +1297,7 @@
       <div class="wlist">${items}</div>`);
   }
   function goFav(){
-    curView='fav';
+    curView='fav';studyStopTimer();
     setActive('me');
     if(!state.fav.length){setScreen(`<div class="phead"><button class="back" data-act="tab" data-tab="me">←</button>收藏夾</div><div class="empty">暫無收藏。</div>`);return;}
     let items='';state.fav.forEach(k=>{const q=getQ(k);if(!q)return;items+=`<div class="witem">${esc(q.stem.slice(0,64))}${q.stem.length>64?'…':''}</div>`;});
@@ -1095,7 +1309,7 @@
   // ---------- quiz ----------
   function startQuiz(list,mode,title,startIdx){
     startIdx=startIdx||0;
-    curView='quiz';
+    curView='quiz';studyStopTimer();
     quiz={mode,title,questions:list,idx:startIdx,selections:[],answeredFlags:list.map(()=>false),results:list.map(()=>null),startTs:Date.now(),remain:5400,timer:null};
     if(mode==='mock'){
       quiz.timer=setInterval(()=>{
@@ -1151,12 +1365,24 @@
     const key=sessionKey(q);const correct=arraysEqual(q.answer,quiz.selections);
     quiz.answeredFlags[quiz.idx]=true;quiz.results[quiz.idx]=correct;
     state.answered[key]={correct,ts:Date.now()};
-    if(!correct){if(!state.wrong.includes(key))state.wrong.push(key);}else{state.wrong=state.wrong.filter(k=>k!==key);}
+    if(!correct){if(!state.wrong.includes(key))state.wrong.push(key);fxStreak=0;}
+    else{
+      state.wrong=state.wrong.filter(k=>k!==key);
+      fxStreak++;
+      if(state.fx.sfx)sfxCorrect();
+      if(state.fx.anim)fxBurst(true);
+      if(fxStreak===5||fxStreak===10||fxStreak===20){
+        if(state.fx.sfx)sfxStreak(fxStreak);
+        if(state.fx.anim)fxConfetti();
+        setTimeout(()=>toast('🔥 連續答對 '+fxStreak+' 題！彩蛋解鎖 🎉'),600);
+      }
+    }
+    if(!correct&&state.fx.sfx)sfxWrong();
     save();renderQuiz();
   }
   function nextQ(){quiz.idx++;quiz.selections=[];if(quiz.idx>=quiz.questions.length)renderSummary();else renderQuiz();}
   function renderSummary(){
-    curView='summary';
+    curView='summary';studyStopTimer();
     if(quiz.timer)clearInterval(quiz.timer);
     let c=0;quiz.results.forEach(r=>{if(r)c++;});
     const n=quiz.questions.length;const acc=n?c/n:0;const sec=Math.round((Date.now()-quiz.startTs)/1000);
@@ -1206,6 +1432,9 @@
     if(act==='restart'){startQuiz(quiz.questions,quiz.mode,quiz.title);return;}
     if(act==='fav-toggle'){const k=a.dataset.key;if(state.fav.includes(k))state.fav=state.fav.filter(x=>x!==k);else state.fav.push(k);save();renderQuiz();return;}
     if(act==='quiz-exit'){if(quiz&&quiz.timer)clearInterval(quiz.timer);goHome();return;}
+    if(act==='fx-anim'){state.fx.anim=a.checked;save();toast(state.fx.anim?'已開啟答對動效 ✨':'已關閉答對動效');return;}
+    if(act==='fx-sfx'){state.fx.sfx=a.checked;save();if(state.fx.sfx)sfxCorrect();toast(state.fx.sfx?'已開啟音效 🔊':'已關閉音效 🔇');return;}
+    if(act==='fx-vol'){const v=parseInt(a.value)/100;state.fx.vol=v;save();const vv=document.querySelector('.fx-vol');if(vv)vv.textContent=Math.round(v*100)+'%';if(state.fx.sfx)sfxCorrect();return;}
     if(act==='reset'){if(confirm('確定重置所有答題 / 打卡 / 錯題 / 收藏？')){state={answered:{},wrong:[],fav:[],checkins:[]};save();goMe();toast('已重置');}return;}
     if(act==='sync-settings'){ showSyncSetup(!!syncUid); return; }
     if(act==='sync-now'){ fullSync(); return; }
