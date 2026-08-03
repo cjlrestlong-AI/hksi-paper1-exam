@@ -22,7 +22,7 @@
   let curView='home', pullTimer=null;   // curView 記錄當前畫面，用於「無感自動下拉」判斷是否安全重渲染
   // 靜態面板（答題/結果/講義/計劃除外）才允許自動下拉後靜默重渲染
   const SAFE_VIEWS=['home','practice','stats','me','wrong','fav'];
-  let _lastPull=0,_lastPush=0,_cloudAns=-1;   // 同步診斷用：最近下拉/上傳時間、雲端題數
+  let _lastPull=0,_lastPush=0,_cloudAns=-1,_cloudStudy=-1;   // 同步診斷用：最近下拉/上傳時間、雲端題數、雲端學習記錄條數
   function getSupa(){try{return JSON.parse(localStorage.getItem(SUPA_KEY)||'null');}catch(e){return null;}}
   function setSupa(o){try{localStorage.setItem(SUPA_KEY,JSON.stringify(o));}catch(e){}}
   function readCookie(n){try{const m=document.cookie.match(new RegExp('(?:^|; )'+n+'=([^;]*)'));return m?decodeURIComponent(m[1]):'';}catch(e){return '';}}
@@ -65,6 +65,18 @@
     const bp=Object.keys(L.planDone||{}).length;
     L.planDone=Object.assign({}, L.planDone||{}, R.planDone||{});
     if(Object.keys(L.planDone||{}).length!==bp)changed=true;
+    // studySessions：逐條按 id 去重合併（冪等——跨裝置不重複、不遺失，這是學習記錄同步的核心）
+    const bs2=(L.studySessions||[]).length;
+    const sm={};(L.studySessions||[]).forEach(s=>{if(s&&s.id)sm[s.id]=s;});
+    (R.studySessions||[]).forEach(s=>{if(s&&s.id)sm[s.id]=s;});
+    L.studySessions=Object.values(sm);
+    if(L.studySessions.length!==bs2)changed=true;
+    // 兼容舊版雲端結構：R.study（{date:{minutes,chapters}}）→ 遷移併入（確定性 id，重複拉取不重複）
+    if(R.study&&typeof R.study==='object'&&Object.keys(R.study).length){
+      const n0=L.studySessions.length;
+      migrateStudy(R, L.studySessions);
+      if(L.studySessions.length!==n0)changed=true;
+    }
     if(changed)save();   // 僅在真的合併到新資料時才寫入與上傳，避免無謂刷新閃爍
     return changed;
   }
@@ -89,6 +101,7 @@
       if(dd){
         _lastPull=Date.now();
         _cloudAns = dd.answered?Object.keys(dd.answered).length:-1;
+        _cloudStudy = Array.isArray(dd.studySessions)?dd.studySessions.length : (dd.study&&typeof dd.study==='object'?Object.keys(dd.study).length:-1);
         if(mergeState(dd)){
           rerender();
           if(notify)toast('☁️ 已從雲端同步新進度（本機已更新）');
@@ -125,7 +138,9 @@
     const lpu = _lastPush?Math.max(0,Math.round((Date.now()-_lastPush)/1000))+' 秒前':'從未';
     const la = Object.keys(state.answered||{}).length;
     const ca = _cloudAns>=0?_cloudAns:'—';
-    return '模式：'+mode+'<br>本機 <b>'+la+'</b> 題　·　雲端 <b>'+ca+'</b> 題<br>最近下拉 '+lp+'　·　最近上傳 '+lpu;
+    const ls = (state.studySessions||[]).length;
+    const cs = _cloudStudy>=0?_cloudStudy:'—';
+    return '模式：'+mode+'<br>本機 <b>'+la+'</b> 題　·　雲端 <b>'+ca+'</b> 題<br>學習記錄：本機 <b>'+ls+'</b> 條　·　雲端 <b>'+cs+'</b> 條<br>最近下拉 '+lp+'　·　最近上傳 '+lpu;
   }
   function supaSelect(code){
     const url=supaUrl.replace(/\/+$/,'')+'/rest/v1/progress?uid=eq.'+encodeURIComponent(code)+'&select=*';
@@ -236,37 +251,64 @@
   if(typeof state.fx.sfx!=='boolean')state.fx.sfx=true;
   if(typeof state.fx.anim!=='boolean')state.fx.anim=true;
   if(typeof state.fx.vol!=='number')state.fx.vol=0.7;
-  // study: {dateStr:{minutes:number, chapters:{chId:minutes}}}  每日複習時長（分鐘）與各章時長
+  // studySessions: [{id,date,type:'note'|'quiz',ch,secs,endTs}]  逐條學習時段（講義閱讀+做題），跨裝置冪等合併
+  // 舊結構 state.study（{date:{minutes,chapters}}）一次性遷移為 sessions，之後不再寫入
+  if(!Array.isArray(state.studySessions))state.studySessions=[];
   if(!state.study||typeof state.study!=='object')state.study={};
+  migrateStudy(state);   // 舊結構 → studySessions（確定性 id，重複執行不重複）
   // 連對彩蛋計數器
   let fxStreak=0;
-  // 複習計時器狀態
-  let studyTimer=null, studyStart=0, studyCh=null;
+  // 學習計時器狀態（統一涵蓋「講義閱讀 note」與「做題 quiz」）
+  let studyTimer=null, studyStartTs=0, studyCh=null, studyType='note';
   function todayStr(){const d=new Date();return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');}
-  // ---- 複習計時：開啟講義開始、離開停止，累計到 state.study ----
-  function studyStartTimer(ch){
-    if(studyTimer){studyStopTimer();}
-    studyCh=ch; studyStart=Date.now();
-    studyTimer=setInterval(()=>{
-      // 每秒累計（用「已過秒數」計算，避免 setInterval 漂移）
-      const secs=Math.round((Date.now()-studyStart)/1000);
-      const mins=Math.round(secs/60*10)/10;
-      el('study-timer')&&(el('study-timer').textContent=mins.toFixed(1)+' 分鐘');
-    },1000);
+  // ---- 舊 study 結構遷移：{date:{minutes,chapters:{chN:min}}} → studySessions（type:'note'）----
+  // id 用確定性格式 mig_<date>_ch<n>，多次合併/重複拉取天然去重
+  function migrateStudy(S, target){
+    const old=S.study||{};
+    if(!Array.isArray(S.studySessions))S.studySessions=[];
+    const arr=target||S.studySessions;
+    if(!Array.isArray(arr))return 0;
+    const exist={};arr.forEach(s=>{if(s&&s.id)exist[s.id]=1;});
+    let added=false;
+    Object.keys(old).forEach(date=>{
+      const d=old[date];if(!d||!d.minutes)return;
+      const chs=d.chapters&&Object.keys(d.chapters).length?d.chapters:{'ch0':d.minutes};
+      Object.keys(chs).forEach(k=>{
+        const min=chs[k];if(!min)return;
+        const n=parseInt((k||'').replace('ch',''))||0;
+        const id='mig_'+date.replace(/-/g,'')+'_ch'+n;
+        if(exist[id])return;
+        arr.push({id,date,type:'note',ch:n>=1&&n<=9?String(n):'0',secs:Math.max(1,Math.round(min*60)),endTs:new Date(date+'T12:00:00').getTime()});
+        exist[id]=1;added=true;
+      });
+    });
+    if(!target&&added)S.studySessions=arr;
+    return added;
   }
-  function studyStopTimer(){
-    if(!studyTimer||studyCh==null)return;
-    const secs=Math.round((Date.now()-studyStart)/1000);
-    if(secs>=5){  // 少於 5 秒不計
-      const d=todayStr();const mins=Math.round(secs/6)/10;  // 每 6 秒 = 0.1 分鐘
-      if(!state.study[d])state.study[d]={minutes:0,chapters:{}};
-      state.study[d].minutes=Math.round((state.study[d].minutes+mins)*10)/10;
-      const chk='ch'+studyCh;
-      state.study[d].chapters[chk]=(state.study[d].chapters[chk]||0)+mins;
+  // ---- 學習計時：開啟（講義或做題）開始、離開自動停止，逐條寫入 studySessions ----
+  function studyStart(ch,type){
+    if(studyTimer)studyStop();
+    studyCh=ch==null?'0':ch; studyType=type||'note'; studyStartTs=Date.now();
+    updateStudyBadge(0);
+    studyTimer=setInterval(()=>{updateStudyBadge(Math.round((Date.now()-studyStartTs)/1000));},1000);
+  }
+  function updateStudyBadge(secs){
+    const t=el('study-timer');if(!t)return;
+    t.textContent=(Math.round(secs/6)/10).toFixed(1)+' 分鐘';
+  }
+  function studyStop(){
+    if(!studyTimer)return;
+    const secs=Math.round((Date.now()-studyStartTs)/1000);
+    if(secs>=5){  // 少於 5 秒不計（誤觸/快速切換）
+      state.studySessions.push({id:'s'+Date.now().toString(36)+Math.random().toString(36).slice(2,6),
+        date:todayStr(),type:studyType,ch:String(studyCh),secs,endTs:Date.now()});
       save();
     }
     clearInterval(studyTimer);studyTimer=null;studyCh=null;
   }
+  // 兼容別名（既有入口函數仍呼叫這兩個名稱）
+  function studyStartTimer(ch){studyStart(ch,'note');}
+  function studyStopTimer(){studyStop();}
   // 離開頁面/切分頁時自動停止計時
   document.addEventListener('visibilitychange',()=>{if(document.hidden)studyStopTimer();});
   window.addEventListener('pagehide',()=>studyStopTimer());
@@ -472,20 +514,36 @@
     if(nums.length===0)return [1,2,3,4,5,6,7,8,9];  // 階段複習/混合/速記等 → 任意章節皆可
     return nums;
   }
+  // 某日彙總（從 studySessions）：{minutes, chapters:{chN:min}, note, quiz}
+  function dayStudy(dateStr){
+    const out={minutes:0,chapters:{},note:0,quiz:0};
+    (state.studySessions||[]).forEach(s=>{
+      if(!s||s.date!==dateStr)return;
+      const m=s.secs/60;
+      out.minutes+=m;
+      if(s.type==='quiz')out.quiz+=m;else out.note+=m;
+      const n=parseInt(s.ch)||0;
+      if(n>=1&&n<=9)out.chapters['ch'+n]=(out.chapters['ch'+n]||0)+m;
+    });
+    out.minutes=Math.round(out.minutes*10)/10;out.note=Math.round(out.note*10)/10;out.quiz=Math.round(out.quiz*10)/10;
+    return out;
+  }
   // 某日是否達標：有複習時長 且 當日讀過的章節 ∩ 計劃章節 ≠ ∅
   function dayAchieved(dateStr){
-    const st=state.study[dateStr];
+    const st=dayStudy(dateStr);
     if(!st||!st.minutes||st.minutes<1)return false;
     const pf=PLAN_FLAT.find(p=>p.date.getFullYear()===''+new Date(dateStr).getFullYear()&&
       p.date.getMonth()===new Date(dateStr).getMonth()&&p.date.getDate()===new Date(dateStr).getDate());
     if(!pf)return st.minutes>=1;  // 計劃外日期：有複習即算達標
     const target=planChapters(pf.ch);
     const read=Object.keys(st.chapters||{}).map(k=>parseInt((k||'').replace('ch',''))||0).filter(n=>n>=1&&n<=9);
+    // 舊資料可能無章節資訊（ch:'0'），有複習即視為相符
+    if(!read.length)return st.minutes>=1;
     return read.some(n=>target.includes(n));
   }
   // 週統計：最近 7 天複習分鐘
   function weekStudyMins(){
-    let m=0;for(let i=0;i<7;i++){const d=new Date();d.setDate(d.getDate()-i);const ds=d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate());m+=(state.study[ds]&&state.study[ds].minutes)||0;}
+    let m=0;for(let i=0;i<7;i++){const d=new Date();d.setDate(d.getDate()-i);const ds=d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate());m+=(dayStudy(ds).minutes)||0;}
     return Math.round(m);
   }
   // 月統計：本月複習分鐘 + 達標天數
@@ -494,8 +552,8 @@
     let mins=0,doneDays=0,totalDays=0;
     const dim=new Date(now.getFullYear(),now.getMonth()+1,0).getDate();
     for(let day=1;day<=dim;day++){
-      const ds=ym+'-'+pad(day);const st=state.study[ds];
-      if(st&&st.minutes){mins+=st.minutes;totalDays++;if(dayAchieved(ds))doneDays++;}
+      const ds=ym+'-'+pad(day);const st=dayStudy(ds);
+      if(st.minutes){mins+=st.minutes;totalDays++;if(dayAchieved(ds))doneDays++;}
     }
     return {mins:Math.round(mins),doneDays,totalDays};
   }
@@ -511,7 +569,7 @@
     for(let i=0;i<first;i++)cells+='<div class="cal-cell cal-empty"></div>';
     for(let day=1;day<=dim;day++){
       const ds=ym+'-'+pad(day);
-      const st=state.study[ds];const mins=st?st.minutes:0;
+      const st=dayStudy(ds);const mins=st.minutes;
       const ach=dayAchieved(ds);
       let cls='cal-cell';
       if(ds===today)cls+=' cal-today';
@@ -902,6 +960,9 @@
         <div class="stats-kgrid">${kgrid}</div>
       </div>
       <div class="card"><div class="ct">📊 分章掌握度</div>${chrows}</div>
+      ${(()=>{const ds=dayStudy(todayStr());const tot=Math.round(ds.minutes);return `<div class="card today-study"><div class="ct">⏱ 今日學習時間</div>
+        <div class="ts-row"><span class="ts-item"><b>${Math.round(ds.note)}</b><i>📖 讀講義</i></span><span class="ts-plus">+</span><span class="ts-item"><b>${Math.round(ds.quiz)}</b><i>📝 做題目</i></span><span class="ts-plus">=</span><span class="ts-item ts-total"><b>${tot}</b><i>分鐘合計</i></span></div>
+        <div class="ts-note">開啟講義自動計時，進入答題自動切換為「做題」計時，離開自動停止；資料隨雲端同步跨裝置累計。</div></div>`;})()}
       ${calendarHTML()}
       <div class="card trend-card"><div class="ct">📈 近 14 日趨勢</div>
         ${trend(st.daily)}
@@ -965,6 +1026,9 @@
     startIdx=startIdx||0;
     curView='quiz';studyStopTimer();
     quiz={mode,title,questions:list,idx:startIdx,selections:[],answeredFlags:list.map(()=>false),results:list.map(()=>null),startTs:Date.now(),remain:5400,timer:null};
+    // 做題計時：自動開始（若上一活動是講義閱讀會先結算），ch 取題目所屬章節，非章節題（模考/錯題/收藏）用模式名
+    let chN=0;if(list[0]&&list[0].chapter){const n=parseInt(list[0].chapter);if(n>=1&&n<=9)chN=n;}
+    studyStart(chN?String(chN):(mode==='chapter'&&curChId?String(curChId):mode),'quiz');
     if(mode==='mock'){
       quiz.timer=setInterval(()=>{
         quiz.remain--;const t=el('qtimer');if(t)t.textContent=fmtTime(quiz.remain);
@@ -985,6 +1049,7 @@
     });
     const key=sessionKey(q);const favOn=state.fav.includes(key);const total=quiz.questions.length;const idx=quiz.idx+1;
     const timerHtml=quiz.mode==='mock'?`<span class="qtimer" id="qtimer">${fmtTime(quiz.remain)}</span>`:'';
+    const studyBadge=`<span class="study-timer-badge">📝 <span id="study-timer">${(Math.round((Date.now()-(studyStartTs||Date.now()))/6000)/10).toFixed(1)} 分鐘</span></span>`;
     let fbHtml='';
     if(answered){
       const ok=quiz.results[quiz.idx];
@@ -1005,6 +1070,7 @@
       <div class="qhead">
         <button class="back" data-act="quiz-exit">←</button>
         <span class="qtitle">${esc(quiz.title)}</span>
+        ${studyBadge}
         ${timerHtml}
         <span class="qprog">${idx}/${total}</span>
       </div>
@@ -1116,7 +1182,9 @@
       supaSelect(syncUid).then(arr=>{
         if(arr&&arr.length&&arr[0]&&arr[0].data){
           const d=arr[0].data||{}; const n=d.answered?Object.keys(d.answered).length:0;
-          set('✅ 連線成功<br>雲端儲存題數：<b>'+n+'</b><br>本機題數：<b>'+Object.keys(state.answered||{}).length+'</b><br><br>若兩者不同，點「立即雙向同步」或等 15 秒自動下拉即可收斂。<br>⚠️ 兩台裝置的「同步碼」必須完全相同才會同步到同一份資料。');
+          const st=Array.isArray(d.studySessions)?d.studySessions.length:(d.study&&typeof d.study==='object'?Object.keys(d.study).length:0);
+          const ls=(state.studySessions||[]).length;
+          set('✅ 連線成功<br>雲端儲存題數：<b>'+n+'</b>（本機 '+Object.keys(state.answered||{}).length+'）<br>雲端學習記錄：<b>'+st+'</b> 條（本機 '+ls+' 條）<br><br>若兩者不同，點「立即雙向同步」或等 15 秒自動下拉即可收斂。<br>⚠️ 兩台裝置的「同步碼」必須完全相同才會同步到同一份資料。');
         } else {
           set('⚠️ 連線成功，但雲端尚無此同步碼的資料（本機尚未上傳過）。點「立即雙向同步」上傳本機進度。');
         }
