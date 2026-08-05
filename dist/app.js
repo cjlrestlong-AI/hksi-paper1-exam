@@ -313,20 +313,60 @@
   document.addEventListener('visibilitychange',()=>{if(document.hidden)studyStopTimer();});
   window.addEventListener('pagehide',()=>studyStopTimer());
   // ---- 音效引擎（Web Audio API 合成，無需外部音檔）----
-  let audioCtx=null;
-  function ensureAudio(){try{if(!audioCtx)audioCtx=new (window.AudioContext||window.webkitAudioContext)();if(audioCtx.state==='suspended')audioCtx.resume();}catch(e){}}
+  // 手機（iOS Safari/微信）限制：AudioContext 必須在「用戶手勢」內創建並完成異步 resume，
+  // 且無手勢一段時間後會被自動掛起（state='suspended'）。因此：
+  //  ① 首次任何觸摸/點擊即解鎖（capture 一次性）② 播放前若掛起則 resume 完成後再排程 ③ 兼容微信 JS Bridge
+  let audioCtx=null, audioUnlocked=false;
+  function unlockAudio(){
+    try{
+      if(audioUnlocked)return; audioUnlocked=true;
+      if(!audioCtx)audioCtx=new (window.AudioContext||window.webkitAudioContext)();
+      if(audioCtx.state==='suspended')audioCtx.resume().catch(()=>{});
+      // 播放一段無聲 buffer 讓上下文真正激活（部分 iOS 版本需要）
+      const b=audioCtx.createBuffer(1,1,22050);
+      const src=audioCtx.createBufferSource();src.buffer=b;
+      const g=audioCtx.createGain();g.gain.value=0;
+      src.connect(g);g.connect(audioCtx.destination);src.start(0);
+    }catch(e){}
+  }
+  function ensureAudio(){
+    try{
+      if(!audioCtx)audioCtx=new (window.AudioContext||window.webkitAudioContext)();
+      if(audioCtx.state==='suspended')audioCtx.resume().catch(()=>{});
+    }catch(e){}
+  }
+  const _unlockOnce=()=>{unlockAudio();
+    document.removeEventListener('pointerdown',_unlockOnce,true);
+    document.removeEventListener('touchstart',_unlockOnce,true);
+    document.removeEventListener('click',_unlockOnce,true);};
+  document.addEventListener('pointerdown',_unlockOnce,true);
+  document.addEventListener('touchstart',_unlockOnce,true);
+  document.addEventListener('click',_unlockOnce,true);
+  // 微信內置瀏覽器：JS Bridge 就緒後再解鎖一次
+  if(typeof window.WeixinJSBridge==='undefined'){
+    document.addEventListener('WeixinJSBridgeReady',()=>{unlockAudio();},false);
+  } else {
+    try{window.WeixinJSBridge.invoke('getNetworkType',{},()=>unlockAudio());}catch(e){}
+  }
   function tone(freq,dur,type,delay,volMul){
     if(!state.fx.sfx)return;
+    const play=()=>{
+      try{
+        if(!audioCtx||audioCtx.state!=='running')return;
+        const t=audioCtx.currentTime+(delay||0);
+        const o=audioCtx.createOscillator(),g=audioCtx.createGain();
+        o.type=type||'sine';o.frequency.value=freq;
+        g.gain.setValueAtTime(0.0001,t);
+        g.gain.exponentialRampToValueAtTime((state.fx.vol||0.7)*(volMul||1),t+0.02);
+        g.gain.exponentialRampToValueAtTime(0.0001,t+dur);
+        o.connect(g);g.connect(audioCtx.destination);
+        o.start(t);o.stop(t+dur+0.05);
+      }catch(e){}
+    };
     try{
       ensureAudio();
-      const t=audioCtx.currentTime+(delay||0);
-      const o=audioCtx.createOscillator(),g=audioCtx.createGain();
-      o.type=type||'sine';o.frequency.value=freq;
-      g.gain.setValueAtTime(0.0001,t);
-      g.gain.exponentialRampToValueAtTime((state.fx.vol||0.7)*(volMul||1),t+0.02);
-      g.gain.exponentialRampToValueAtTime(0.0001,t+dur);
-      o.connect(g);g.connect(audioCtx.destination);
-      o.start(t);o.stop(t+dur+0.05);
+      if(audioCtx.state==='suspended'){audioCtx.resume().then(play).catch(()=>{});}
+      else play();
     }catch(e){}
   }
   function sfxCorrect(){tone(660,0.12,'sine',0,1);tone(880,0.18,'sine',0.09,1);tone(1320,0.22,'sine',0.18,0.9);}
@@ -986,6 +1026,7 @@
         <div class="fx-row"><span>🔈 音量 <b class="fx-vol">${Math.round(fx.vol*100)}%</b></span>
           <input class="fx-vol-slider" type="range" min="0" max="100" value="${Math.round(fx.vol*100)}" data-act="fx-vol"></div>
         <div class="fx-note">連續答對 5／10／20 題解鎖彩蛋 🎉</div>
+        <div class="fx-note">📱 手機沒聲音？① 檢查 iPhone 左側靜音鍵是否開啟 ② 調高手機／微信音量 ③ 微信內開啟請點右上角「⋯ › 設置 › 允許播放音頻」</div>
       </div>
       <div class="card">
         <div class="mlink" data-act="sync-settings"><span>☁️ 雲端同步</span><b>${syncUid?('已連線 · '+esc(syncUid)):'點此設定 ›'}</b></div>
